@@ -154,6 +154,53 @@ final class MoverExecuteTests: MoveTreeCase {
         XCTAssertFalse(fm.fileExists(atPath: folder(p2, a2, o2).appendingPathComponent("archived-sessions.idx").path))
     }
 
+    func testUnreadableDestIndexAbortsBeforeAnyChange() throws {
+        let src = try writeRecord("local_1", cwd: "/tmp", archived: true)
+        let idx = folder(p2, a2, o2).appendingPathComponent("archived-sessions.idx")
+        try Data("not json".utf8).write(to: idx)
+        XCTAssertThrowsError(try SessionMover.execute(sessionId: "local_1", from: from, to: to, profiles: [p1, p2], roots: roots)) {
+            XCTAssertTrue("\($0)".contains("unreadable"))
+        }
+        XCTAssertTrue(fm.fileExists(atPath: src.path))
+        XCTAssertEqual(try Data(contentsOf: idx), Data("not json".utf8))
+        XCTAssertFalse(fm.fileExists(atPath: folder(p2, a2, o2).appendingPathComponent("local_1.json").path))
+    }
+
+    func testIndexUpdateKeepsOtherKeys() throws {
+        try writeRecord("local_1", cwd: "/tmp", archived: true)
+        let dstDir = folder(p2, a2, o2)
+        try JSONSerialization.data(withJSONObject: ["v": 7, "archived": ["local_9"], "extra": "keep"] as [String: Any])
+            .write(to: dstDir.appendingPathComponent("archived-sessions.idx"))
+        _ = try SessionMover.execute(sessionId: "local_1", from: from, to: to, profiles: [p1, p2], roots: roots)
+        let d = json(dstDir.appendingPathComponent("archived-sessions.idx"))
+        XCTAssertEqual(d["archived"] as? [String], ["local_9", "local_1"])
+        XCTAssertEqual(d["extra"] as? String, "keep")
+        XCTAssertEqual(d["v"] as? Int, 7)
+    }
+
+    func testAfterWriteFaultRollsBackCleanlyAndStoreKeepsBackupDir() throws {
+        let src = try writeRecord("local_1", cwd: "/tmp")
+        let before = try Data(contentsOf: src)
+        SessionMover.faultPoint = "afterWrite"
+        XCTAssertThrowsError(try SessionMover.execute(sessionId: "local_1", from: from, to: to, profiles: [p1, p2], roots: roots)) {
+            XCTAssertNotNil(($0 as? MoveError)?.backupDir)
+        }
+        XCTAssertEqual(try Data(contentsOf: src), before)
+        XCTAssertFalse(fm.fileExists(atPath: folder(p2, a2, o2).appendingPathComponent("local_1.json").path))
+
+        let store = MoveStore(url: root.appendingPathComponent("moves.json"), roots: roots)
+        store.add(sessionId: "local_1", title: "t", from: from, to: to)
+        let r = store.runDue(profiles: [p1, p2], running: [], liveSessions: [])
+        XCTAssertEqual(r.first?.status, .failed)
+        XCTAssertNotNil(store.all().first?.backupDir)
+        XCTAssertTrue(fm.fileExists(atPath: store.all().first!.backupDir!))
+    }
+
+    func testBadSessionIdRejected() throws {
+        XCTAssertThrowsError(try SessionMover.execute(sessionId: "local_../x", from: from, to: to, profiles: [p1, p2], roots: roots))
+        XCTAssertFalse(fm.fileExists(atPath: roots.backups.path))
+    }
+
     func testMissingRecordFails() {
         XCTAssertThrowsError(try SessionMover.execute(sessionId: "local_9", from: from, to: to, profiles: [p1, p2], roots: roots)) {
             XCTAssertEqual(($0 as? MoveError)?.conflict, false)
@@ -217,6 +264,35 @@ final class MoverScratchTests: MoveTreeCase {
         XCTAssertEqual(json(folder(p1, a1, o1).appendingPathComponent("local_1.json"))["cwd"] as? String, aliasCwd)
     }
 
+    /// Chat whose cwd is `cwd` (created on disk) must move as a record only; nothing else may move.
+    func assertRecordOnly(cwd: URL, keep: URL) throws {
+        try fm.createDirectory(at: cwd, withIntermediateDirectories: true)
+        try writeRecord("local_1", cwd: cwd.path)
+        let r = try SessionMover.execute(sessionId: "local_1", from: from, to: to, profiles: [p1, p2], roots: roots)
+        XCTAssertNil(r.newCwd)
+        XCTAssertTrue(fm.fileExists(atPath: cwd.path))
+        XCTAssertTrue(fm.fileExists(atPath: keep.path))
+        XCTAssertEqual(json(folder(p2, a2, o2).appendingPathComponent("local_1.json"))["cwd"] as? String, cwd.path)
+        XCTAssertFalse(fm.fileExists(atPath: p2.dataDir.appendingPathComponent("scratch-workspaces").path))
+    }
+
+    func testAccountFolderCwdMovesRecordOnly() throws {
+        let acct = p1.dataDir.appendingPathComponent("scratch-workspaces/\(a1)")
+        let s1 = acct.appendingPathComponent("\(o1)/scratch-1")
+        try fm.createDirectory(at: s1, withIntermediateDirectories: true)
+        try assertRecordOnly(cwd: acct, keep: s1)
+    }
+
+    func testOtherOrgScratchCwdMovesRecordOnly() throws {
+        let x = p1.dataDir.appendingPathComponent("scratch-workspaces/\(a1)/other-org/scratch-x")
+        try assertRecordOnly(cwd: x, keep: x)
+    }
+
+    func testNestedScratchCwdMovesRecordOnly() throws {
+        let s1 = p1.dataDir.appendingPathComponent("scratch-workspaces/\(a1)/\(o1)/scratch-1")
+        try assertRecordOnly(cwd: s1.appendingPathComponent("sub"), keep: s1)
+    }
+
     func testMissingScratchFolderMovesRecordOnly() throws {
         let gone = p1.dataDir.appendingPathComponent("scratch-workspaces/\(a1)/\(o1)/scratch-gone").path
         try writeRecord("local_1", cwd: gone)
@@ -269,6 +345,18 @@ final class MoveStoreTests: MoveTreeCase {
         let r = store.runDue(profiles: [p1, p2], running: [], liveSessions: [])
         XCTAssertEqual(r.first?.status, .conflict)
         XCTAssertNotNil(r.first?.note)
+    }
+
+    func testCorruptStoreIsPreservedNotWiped() throws {
+        try Data("garbage".utf8).write(to: store.url)
+        XCTAssertTrue(store.all().isEmpty)
+        XCTAssertEqual(try String(contentsOf: store.url), "garbage")
+        let m = store.add(sessionId: "local_1", title: "t", from: from, to: to)
+        XCTAssertNotNil(m)
+        let files = try fm.contentsOfDirectory(atPath: root.path).filter { $0.hasPrefix("moves.json.corrupt-") }
+        XCTAssertEqual(files.count, 1)
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent(files[0])), "garbage")
+        XCTAssertEqual(store.all().map(\.id), [m!.id])
     }
 
     func testCancel() {

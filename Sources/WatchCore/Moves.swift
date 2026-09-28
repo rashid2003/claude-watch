@@ -14,10 +14,18 @@ public final class MoveStore {
 
     struct File: Codable { var moves: [PendingMove] = [] }
 
+    /// Missing file means an empty list; a present but undecodable file is set aside on the next update.
+    private enum Loaded { case missing, corrupt, moves([PendingMove]) }
+
+    private func load() -> Loaded {
+        guard let data = try? Data(contentsOf: url) else { return .missing }
+        guard let f = try? JSONCoder.decoder.decode(File.self, from: data) else { return .corrupt }
+        return .moves(f.moves)
+    }
+
     public func all() -> [PendingMove] {
-        guard let data = try? Data(contentsOf: url),
-              let f = try? JSONCoder.decoder.decode(File.self, from: data) else { return [] }
-        return f.moves
+        if case .moves(let m) = load() { return m }
+        return []
     }
 
     public var pending: [PendingMove] { all().filter { $0.status == .pending } }
@@ -27,7 +35,16 @@ public final class MoveStore {
         let fd = open(url.path + ".lock", O_CREAT | O_RDWR, 0o644)
         if fd >= 0 { flock(fd, LOCK_EX) }
         defer { if fd >= 0 { flock(fd, LOCK_UN); close(fd) } }
-        var list = all()
+        var list: [PendingMove] = []
+        switch load() {
+        case .moves(let m): list = m
+        case .missing: break
+        case .corrupt:
+            let aside = url.deletingLastPathComponent()
+                .appendingPathComponent(url.lastPathComponent + ".corrupt-\(Int(Date().timeIntervalSince1970))")
+            try? FileManager.default.removeItem(at: aside)
+            try? FileManager.default.moveItem(at: url, to: aside)
+        }
         let result = body(&list)
         let finished = list.filter { $0.status != .pending }
         if finished.count > Self.keepFinished {
@@ -82,6 +99,7 @@ public final class MoveStore {
                 } catch let e as MoveError {
                     list[i].status = e.conflict ? .conflict : .failed
                     list[i].note = e.description
+                    list[i].backupDir = e.backupDir
                 } catch {
                     list[i].status = .failed
                     list[i].note = error.localizedDescription

@@ -3,6 +3,7 @@ import Foundation
 public struct MoveError: Error, CustomStringConvertible, Sendable {
     public var description: String
     public var conflict: Bool
+    public var backupDir: String?
     init(_ description: String, conflict: Bool = false) { self.description = description; self.conflict = conflict }
 }
 
@@ -73,8 +74,22 @@ public enum SessionMover {
         JSONFile.object(at: dir.appendingPathComponent(archiveIndex))?["archived"] as? [String] ?? []
     }
 
-    static func writeArchived(_ ids: [String], _ dir: URL) throws {
-        try JSONSerialization.data(withJSONObject: ["v": 1, "archived": ids] as [String: Any])
+    /// The index object of a folder: nil when there is no index file. Throws when the file exists but
+    /// is not a JSON object with an `archived` string array.
+    static func loadIndex(_ dir: URL, label: String) throws -> [String: Any]? {
+        let url = dir.appendingPathComponent(archiveIndex)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard let obj = JSONFile.object(at: url), obj["archived"] is [String] else {
+            throw MoveError("archived list in \(label) is unreadable")
+        }
+        return obj
+    }
+
+    /// Replaces `archived` in the existing index object (all other keys kept); a new file gets `v: 1`.
+    static func writeArchived(_ ids: [String], _ dir: URL, existing: [String: Any]?) throws {
+        var obj = existing ?? ["v": 1]
+        obj["archived"] = ids
+        try JSONSerialization.data(withJSONObject: obj)
             .write(to: dir.appendingPathComponent(archiveIndex), options: .atomic)
     }
 
@@ -121,6 +136,9 @@ public enum SessionMover {
     public static func execute(sessionId: String, from: ChatLocation, to: ChatLocation, profiles: [Profile],
                                roots: MoverRoots = .live, now: Date = Date()) throws -> Outcome {
         let fm = FileManager.default
+        guard sessionId.range(of: "^local_[A-Za-z0-9-]+$", options: .regularExpression) != nil else {
+            throw MoveError("invalid chat id")
+        }
         guard let src = profiles.first(where: { $0.id == from.profileId }),
               let dst = profiles.first(where: { $0.id == to.profileId }) else { throw MoveError("window not found") }
         let srcDir = folder(from, src), dstDir = folder(to, dst)
@@ -129,6 +147,8 @@ public enum SessionMover {
         guard fm.fileExists(atPath: srcURL.path) else { throw MoveError("chat not found in \(from.label)") }
         guard !fm.fileExists(atPath: dstURL.path) else { throw MoveError("already in \(to.label)", conflict: true) }
         guard var rec = JSONFile.object(at: srcURL) else { throw MoveError("chat record unreadable") }
+        let srcIndex = try loadIndex(srcDir, label: from.label)
+        let dstIndex = try loadIndex(dstDir, label: to.label)
 
         // Backup first, so a move can always be undone by hand.
         var backup = roots.backups.appendingPathComponent(stamp(now) + "-" + sessionId)
@@ -149,56 +169,69 @@ public enum SessionMover {
                                    options: [.prettyPrinted])
             .write(to: backup.appendingPathComponent("move.json"))
 
-        var undo: [() -> Void] = []
-        func restore(_ copy: URL, to url: URL) {
-            try? fm.removeItem(at: url)
-            if fm.fileExists(atPath: copy.path) { try? fm.copyItem(at: copy, to: url) }
+        var undo: [() throws -> Void] = []
+        func restore(_ copy: URL, to url: URL) throws {
+            if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
+            if fm.fileExists(atPath: copy.path) { try fm.copyItem(at: copy, to: url) }
         }
         do {
             for k in accountKeys { rec.removeValue(forKey: k) }
             var newCwd: String?
             if let cwd = rec["cwd"] as? String,
-               let moved = try relocateScratch(cwd: cwd, src: src, dst: dst, to: to, roots: roots, backup: backup, undo: &undo) {
+               let moved = try relocateScratch(cwd: cwd, from: from, src: src, dst: dst, to: to, roots: roots, backup: backup, undo: &undo) {
                 if let origin = rec["originCwd"] as? String, resolve(origin) == resolve(cwd) { rec["originCwd"] = moved }
                 rec["cwd"] = moved
                 newCwd = moved
             }
 
             try fm.createDirectory(at: dstDir, withIntermediateDirectories: true)
-            try JSONSerialization.data(withJSONObject: rec).write(to: dstURL, options: .withoutOverwriting)
-            undo.append { try? fm.removeItem(at: dstURL) }
+            try JSONSerialization.data(withJSONObject: rec).write(to: dstURL, options: .atomic)
+            undo.append { try fm.removeItem(at: dstURL) }
             try fault("afterWrite")
 
-            let srcArchived = readArchived(srcDir)
+            let srcArchived = srcIndex?["archived"] as? [String] ?? []
             if (rec["isArchived"] as? Bool ?? false) || srcArchived.contains(sessionId) {
-                var ids = readArchived(dstDir)
+                var ids = dstIndex?["archived"] as? [String] ?? []
                 if !ids.contains(sessionId) { ids.append(sessionId) }
-                try writeArchived(ids, dstDir)
-                undo.append { restore(dstIdxBackup, to: dstIdx) }
+                undo.append { try restore(dstIdxBackup, to: dstIdx) }
+                try writeArchived(ids, dstDir, existing: dstIndex)
             }
             if srcArchived.contains(sessionId) {
-                try writeArchived(srcArchived.filter { $0 != sessionId }, srcDir)
-                undo.append { restore(srcIdxBackup, to: srcIdx) }
+                undo.append { try restore(srcIdxBackup, to: srcIdx) }
+                try writeArchived(srcArchived.filter { $0 != sessionId }, srcDir, existing: srcIndex)
             }
 
+            undo.append { try restore(backup.appendingPathComponent("record.json"), to: srcURL) }
             try fm.removeItem(at: srcURL)
-            undo.append { restore(backup.appendingPathComponent("record.json"), to: srcURL) }
             try fault("end")
             return Outcome(backupDir: backup, newCwd: newCwd)
         } catch {
-            for u in undo.reversed() { u() }
-            throw error
+            var failures: [String] = []
+            for u in undo.reversed() {
+                do { try u() } catch { failures.append(error.localizedDescription) }
+            }
+            let original = (error as? MoveError)?.description ?? error.localizedDescription
+            var out: MoveError
+            if failures.isEmpty {
+                out = MoveError(original, conflict: (error as? MoveError)?.conflict ?? false)
+            } else {
+                out = MoveError("move failed (\(original)) and rollback was incomplete: \(failures.joined(separator: "; ")) — backup at \(backup.path)",
+                                conflict: (error as? MoveError)?.conflict ?? false)
+            }
+            out.backupDir = backup.path
+            throw out
         }
     }
 
     /// Scratch-workspace chats get their folder moved with them, otherwise the source window
     /// may delete it once the chat is gone. Also moves the transcript folder so the CLI finds it
     /// under the new cwd. Returns the new cwd, or nil when nothing moved.
-    static func relocateScratch(cwd: String, src: Profile, dst: Profile, to: ChatLocation,
-                                roots: MoverRoots, backup: URL, undo: inout [() -> Void]) throws -> String? {
+    static func relocateScratch(cwd: String, from: ChatLocation, src: Profile, dst: Profile, to: ChatLocation,
+                                roots: MoverRoots, backup: URL, undo: inout [() throws -> Void]) throws -> String? {
         let fm = FileManager.default
         let real = resolve(cwd)
-        guard real.hasPrefix(resolve(src.dataDir.path) + "/scratch-workspaces/"), fm.fileExists(atPath: real) else { return nil }
+        let scratchParent = resolve(src.dataDir.path) + "/scratch-workspaces/\(from.accountUuid)/\(from.orgUuid)"
+        guard (real as NSString).deletingLastPathComponent == scratchParent, fm.fileExists(atPath: real) else { return nil }
         let name = (real as NSString).lastPathComponent
         let parent = URL(fileURLWithPath: resolve(dst.dataDir.path))
             .appendingPathComponent("scratch-workspaces/\(to.accountUuid)/\(to.orgUuid)")
@@ -216,7 +249,7 @@ public enum SessionMover {
 
         try fm.createDirectory(at: parent, withIntermediateDirectories: true)
         try fm.moveItem(atPath: real, toPath: newPath)
-        undo.append { try? fm.moveItem(atPath: newPath, toPath: real) }
+        undo.append { try fm.moveItem(atPath: newPath, toPath: real) }
 
         let newest = oldDirs.max { latestWrite($0) < latestWrite($1) }
         for dir in oldDirs {
@@ -225,7 +258,7 @@ public enum SessionMover {
                 : backup.appendingPathComponent("stale-transcripts/" + dir.lastPathComponent)
             try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
             try fm.moveItem(at: dir, to: dest)
-            undo.append { try? fm.moveItem(at: dest, to: dir) }
+            undo.append { try fm.moveItem(at: dest, to: dir) }
         }
         return newPath
     }
