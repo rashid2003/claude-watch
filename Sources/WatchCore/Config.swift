@@ -53,6 +53,8 @@ public struct Config: Codable, Sendable {
     /// Extra args for CLI-mode retries, e.g. ["--permission-mode", "acceptEdits"].
     /// Empty = mirror the session's own permission mode.
     public var cliExtraArgs: [String] = []
+    /// Display names for org UUIDs, used in "move to" menus. Unknown orgs show their first 8 characters.
+    public var orgNames: [String: String] = [:]
 
     public init() {}
 
@@ -69,6 +71,7 @@ public struct Config: Codable, Sendable {
         warnBeforeCapMinutes = try c.decodeIfPresent(Double.self, forKey: .warnBeforeCapMinutes) ?? d.warnBeforeCapMinutes
         profiles = try c.decodeIfPresent([String: ProfileConfig].self, forKey: .profiles) ?? [:]
         cliExtraArgs = try c.decodeIfPresent([String].self, forKey: .cliExtraArgs) ?? []
+        orgNames = try c.decodeIfPresent([String: String].self, forKey: .orgNames) ?? [:]
     }
 
     public func retryMode(for profileId: String) -> RetryMode {

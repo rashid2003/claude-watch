@@ -81,6 +81,7 @@ public struct SessionInfo: Codable, Hashable, Sendable, Identifiable {
     public var desktopErrorAt: Date?
     public var hasPendingPermission: Bool
     public var recordModifiedAt: Date = .distantPast
+    public var folder: String = ""     // "account/org" folder the record lives in
 }
 
 public struct SessionStatus: Codable, Hashable, Sendable, Identifiable {
@@ -130,6 +131,9 @@ public struct Snapshot: Codable, Sendable {
     public var queue: [RetryItem]
     public var engineOwner: Bool
     public var scanning: Bool
+    public var moves: [PendingMove] = []
+    public var locations: [ChatLocation] = []
+    public var profiles: [Profile] = []
 }
 
 public struct RetryItem: Codable, Hashable, Sendable, Identifiable {
@@ -157,4 +161,49 @@ public struct RetryLogEntry: Codable, Sendable {
     public var outcome: String   // sent, send_failed, verified, relimited, no_response
     public var detail: String?
     public var latencySeconds: Double?
+}
+
+/// A place a chat record can live: one profile window, signed into one account + org.
+public struct ChatLocation: Codable, Hashable, Sendable, Identifiable {
+    public var profileId: String
+    public var accountUuid: String
+    public var orgUuid: String
+    public var profileName: String
+    public var label: String           // "<profile name> · <org name>"
+    public var chatCount: Int
+    public var id: String { profileId + "/" + accountUuid + "/" + orgUuid }
+
+    public init(profileId: String, accountUuid: String, orgUuid: String,
+                profileName: String = "", label: String = "", chatCount: Int = 0) {
+        self.profileId = profileId; self.accountUuid = accountUuid; self.orgUuid = orgUuid
+        self.profileName = profileName.isEmpty ? profileId : profileName
+        self.label = label.isEmpty ? profileId : label
+        self.chatCount = chatCount
+    }
+}
+
+/// One chat record as listed in the All chats window.
+public struct ChatRecord: Codable, Hashable, Sendable, Identifiable {
+    public var id: String              // local_…
+    public var cliSessionId: String?
+    public var title: String
+    public var cwd: String
+    public var lastActivityAt: Date
+    public var isArchived: Bool
+    public var location: ChatLocation
+}
+
+public struct PendingMove: Codable, Hashable, Sendable, Identifiable {
+    public enum Status: String, Codable, Sendable { case pending, done, failed, conflict, undone }
+    public var id: String
+    public var sessionId: String
+    public var title: String
+    public var from: ChatLocation
+    public var to: ChatLocation
+    public var createdAt: Date
+    public var status: Status
+    public var finishedAt: Date?
+    public var note: String?
+    public var backupDir: String?
+    public var undoOf: String?
 }

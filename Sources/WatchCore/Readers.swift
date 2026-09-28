@@ -54,6 +54,7 @@ public final class SessionIndex {
                     if Date().timeIntervalSince(mtime) < 8 * 86400 {
                         info = autoreleasepool { Self.parse(url: url, profileId: profile.id, accountUuid: account + "/" + org) }
                         info?.recordModifiedAt = mtime
+                        info?.folder = account + "/" + org
                     }
                     cache[url.path] = (mtime, info)
                     if let info { result.append(info) }
