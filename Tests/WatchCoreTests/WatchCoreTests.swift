@@ -94,3 +94,62 @@ final class RunnerTests: XCTestCase {
         XCTAssertTrue(env.contains { $0.hasPrefix("PATH=") })
     }
 }
+
+/// Pure due-now logic of the retry engine (the engine itself reads and writes the real state file).
+final class RetryDueTests: XCTestCase {
+    let now = Date(timeIntervalSince1970: 1_790_600_000)
+
+    func item(_ status: RetryItem.Status = .waiting, resetsIn: TimeInterval = 3600, attempts: Int = 0) -> RetryItem {
+        RetryItem(sessionId: "local_1", cliSessionId: nil, profileId: "p", title: "t", cwd: "/", failedAt: now.addingTimeInterval(-600),
+                  resetsAt: now.addingTimeInterval(resetsIn), status: status, attempts: attempts,
+                  lastAttemptAt: nil, lastMode: nil, note: nil)
+    }
+
+    func testWaitsForResetAndDelay() {
+        XCTAssertFalse(RetryEngine.isDue(item(resetsIn: 3600), limitedUntil: nil, retryDelay: 60, now: now))
+        XCTAssertFalse(RetryEngine.isDue(item(resetsIn: -30), limitedUntil: nil, retryDelay: 60, now: now))
+        XCTAssertTrue(RetryEngine.isDue(item(resetsIn: -90), limitedUntil: nil, retryDelay: 60, now: now))
+        // Past its own reset but the account is still limited.
+        XCTAssertFalse(RetryEngine.isDue(item(resetsIn: -90), limitedUntil: now.addingTimeInterval(600), retryDelay: 60, now: now))
+        XCTAssertTrue(RetryEngine.isDue(item(resetsIn: -90), limitedUntil: now.addingTimeInterval(-1), retryDelay: 60, now: now))
+    }
+
+    func testForcedWaitingItemIsDueWhileLimited() {
+        var it = item(resetsIn: 3600, attempts: 1)
+        XCTAssertTrue(RetryEngine.forceDue(&it))
+        XCTAssertEqual(it.status, .waiting)
+        XCTAssertEqual(it.attempts, 1)
+        XCTAssertTrue(RetryEngine.isDue(it, limitedUntil: now.addingTimeInterval(3600), retryDelay: 60, now: now))
+        XCTAssertTrue(RetryEngine.isDue(it, limitedUntil: .distantFuture, retryDelay: 60, now: now))
+    }
+
+    func testFailedItemStartsOver() {
+        var it = item(.failed, resetsIn: -7200, attempts: 3)
+        XCTAssertFalse(RetryEngine.isDue(it, limitedUntil: nil, retryDelay: 60, now: now))
+        XCTAssertTrue(RetryEngine.forceDue(&it))
+        XCTAssertEqual(it.status, .waiting)
+        XCTAssertEqual(it.attempts, 0)
+        XCTAssertTrue(RetryEngine.isDue(it, limitedUntil: now.addingTimeInterval(3600), retryDelay: 60, now: now))
+    }
+
+    func testInFlightAndFinishedItemsCantBeForced() {
+        for s in [RetryItem.Status.running, .verifying, .done, .resolved] {
+            var it = item(s)
+            XCTAssertFalse(RetryEngine.forceDue(&it), s.rawValue)
+            XCTAssertEqual(it, item(s))
+            XCTAssertFalse(RetryEngine.isDue(it, limitedUntil: nil, retryDelay: 0, now: now.addingTimeInterval(7200)))
+        }
+    }
+
+    func testOwnPromptIsNotAManualContinue() {
+        var it = item()
+        var tail = TranscriptTail(last: .userPrompt, lastAt: now)
+        XCTAssertTrue(RetryEngine.continuedManually(it, tail: tail))       // never sent: the user typed it
+        it.lastAttemptAt = now.addingTimeInterval(-5)
+        XCTAssertFalse(RetryEngine.continuedManually(it, tail: tail))      // probably our "continue"
+        tail.last = .assistantDone
+        XCTAssertTrue(RetryEngine.continuedManually(it, tail: tail))
+        tail.last = .rateLimited
+        XCTAssertFalse(RetryEngine.continuedManually(it, tail: tail))
+    }
+}

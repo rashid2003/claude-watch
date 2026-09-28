@@ -94,6 +94,19 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
         monitor.perform { m in m.engine.retryNow(profileId: profileId); m.refreshNow() }
     }
 
+    /// Retry every waiting chat of an account (all its member profiles).
+    func retryAll(_ profileIds: [String]) {
+        monitor.perform { m in
+            for id in profileIds { m.engine.retryNow(profileId: id) }
+            m.refreshNow()
+        }
+    }
+
+    /// Send "continue" to one queued chat now, even if its account is still limited.
+    func retryNow(itemId: String) {
+        monitor.perform { m in m.engine.retryNow(itemId: itemId); m.refreshNow() }
+    }
+
     func dismiss(_ id: String) { monitor.perform { m in m.engine.dismiss(itemId: id); m.refreshNow() } }
 
     // MARK: Moving chats
@@ -300,6 +313,7 @@ struct SessionRow: View {
 struct AccountCard: View {
     let a: AccountStatus
     let now: Date
+    var queue: [RetryItem] = []   // this account's retry items
     @EnvironmentObject var model: WatchModel
     @Environment(\.openWindow) private var openWindow
 
@@ -341,6 +355,8 @@ struct AccountCard: View {
             ForEach(visibleSessions) { s in
                 SessionRow(s: s) { model.open(sessionId: s.id, profileId: s.info.profileId) }
             }
+            QueueBlock(title: "Retry queue", queue: queue, now: now,
+                       retryAll: { model.retryAll(a.memberProfileIds) })
         }
         .padding(.vertical, 8)
     }
@@ -358,60 +374,99 @@ struct AccountCard: View {
     }
 }
 
-struct QueueSection: View {
+/// Retry items of one account (or of no known account), shown inside its card.
+struct QueueBlock: View {
+    let title: String
     let queue: [RetryItem]
-    let accounts: [AccountStatus]
     let now: Date
+    var showProfile = false
+    var retryAll: (() -> Void)?
     @EnvironmentObject var model: WatchModel
 
     var body: some View {
-        let active = queue.filter { [.waiting, .running, .verifying].contains($0.status) }
-        let recent = Array(queue.filter { ![.waiting, .running, .verifying].contains($0.status) }.suffix(3))
+        let active = queue.filter { $0.isActive }
+        let recent = Array(queue.filter { !$0.isActive }.suffix(2))
+        let waiting = active.filter { $0.status == .waiting }.count
         if !active.isEmpty || !recent.isEmpty {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 1) {
                 HStack {
-                    Text("Retry queue").fontWeight(.semibold)
+                    Text(title).foregroundStyle(.secondary)
                     Spacer()
-                    if !active.isEmpty {
-                        Button("Retry now") { model.retryNow(nil) }.buttonStyle(.link).font(Theme.monoSmall)
+                    if waiting >= 2, let retryAll {
+                        Button("Retry all", action: retryAll).buttonStyle(.link)
+                            .help("Send “continue” to all \(waiting) waiting chats now")
                     }
                 }
-                ForEach(active) { it in row(it, mark: "⟳", color: Theme.clay, detail: when(it)) }
-                ForEach(recent) { it in
-                    row(it, mark: it.status == .done ? "✓" : it.status == .failed ? "✗" : "–",
-                        color: it.status == .done ? Theme.green : it.status == .failed ? Theme.red : .secondary,
-                        detail: it.note ?? "")
+                .padding(.horizontal, 4)
+                ForEach(active + recent) { it in
+                    QueueRow(it: it, now: now,
+                             profile: showProfile ? (model.profile(it.profileId)?.name ?? it.profileId) : nil)
                 }
             }
             .font(Theme.monoSmall)
-            .padding(.vertical, 6)
+            .padding(.top, 2)
         }
     }
+}
 
-    func row(_ it: RetryItem, mark: String, color: Color, detail: String) -> some View {
+struct QueueRow: View {
+    let it: RetryItem
+    let now: Date
+    var profile: String?      // shown when the item isn't under an account card
+    @EnvironmentObject var model: WatchModel
+    @State private var hover = false
+
+    var body: some View {
         HStack(spacing: 6) {
-            Text(mark).foregroundStyle(color)
-            Text(accounts.first { $0.memberProfileIds.contains(it.profileId) }?.profile.name ?? it.profileId)
-                .foregroundStyle(.secondary).frame(width: 90, alignment: .leading).lineLimit(1)
-            Text(it.title).lineLimit(1)
+            Text(mark.0).foregroundStyle(mark.1)
+            if let profile {
+                Text(profile).foregroundStyle(.secondary).frame(width: 90, alignment: .leading).lineLimit(1)
+            }
+            Text(it.title).lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 4)
             Text(detail).foregroundStyle(.secondary).lineLimit(1)
+            if it.isActive || it.status == .failed {
+                Button("Retry now") { model.retryNow(itemId: it.id) }
+                    .buttonStyle(.link)
+                    .disabled(it.status == .running || it.status == .verifying)
+                    .help(it.status == .failed ? "Try again from scratch"
+                          : "Retry now, even if the limit hasn't reset")
+            }
             Button { model.dismiss(it.id) } label: { Image(systemName: "xmark") }
                 .buttonStyle(.plain).foregroundStyle(.tertiary).help("Remove from queue")
         }
+        .font(Theme.monoSmall)
+        .padding(.vertical, 1).padding(.horizontal, 4)
+        .background(RoundedRectangle(cornerRadius: 4).fill(hover ? Color.primary.opacity(0.06) : .clear))
         .contentShape(Rectangle())
+        .onHover { hover = $0 }
         .onTapGesture { model.open(sessionId: it.sessionId, profileId: it.profileId) }
+        .help(it.note ?? "Open in Claude")
     }
 
-    func when(_ it: RetryItem) -> String {
+    var mark: (String, Color) {
+        switch it.status {
+        case .waiting, .running, .verifying: ("⟳", Theme.clay)
+        case .done: ("✓", Theme.green)
+        case .failed: ("✗", Theme.red)
+        case .resolved: ("–", .secondary)
+        }
+    }
+
+    var detail: String {
         switch it.status {
         case .verifying: return "checking reply…"
         case .waiting:
             guard let r = it.resetsAt, r > .distantPast else { return "due" }
             return r > now ? "in " + Fmt.duration(r.timeIntervalSince(now)) : "due"
-        default: return it.status.rawValue
+        case .running: return it.status.rawValue
+        default: return it.note ?? ""
         }
     }
+}
+
+extension RetryItem {
+    var isActive: Bool { [.waiting, .running, .verifying].contains(status) }
 }
 
 struct PopoverView: View {
@@ -437,10 +492,13 @@ struct PopoverView: View {
                 if let s = model.snapshot {
                     ForEach(s.accounts) { a in
                         Divider()
-                        AccountCard(a: a, now: ctx.date)
+                        AccountCard(a: a, now: ctx.date, queue: s.queue.filter { a.memberProfileIds.contains($0.profileId) })
                     }
                     Divider()
-                    QueueSection(queue: s.queue, accounts: s.accounts, now: ctx.date)
+                    let other = s.queue.filter { it in !s.accounts.contains { $0.memberProfileIds.contains(it.profileId) } }
+                    if !other.isEmpty {
+                        QueueBlock(title: "Other", queue: other, now: ctx.date, showProfile: true).padding(.vertical, 4)
+                    }
                     if !s.engineOwner {
                         Text("Another claude-watch process is running retries.")
                             .font(Theme.monoSmall).foregroundStyle(.secondary).padding(.vertical, 4)

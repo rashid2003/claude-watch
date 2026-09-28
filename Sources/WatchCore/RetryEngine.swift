@@ -42,13 +42,71 @@ public final class RetryEngine {
         try? data.write(to: Paths.state, options: .atomic)
     }
 
-    /// Marks waiting items of a profile (or all) as due immediately.
+    /// Marks waiting items of a profile (or all) as due immediately, even while the account is limited.
     public func retryNow(profileId: String?) {
         for i in items.indices where items[i].status == .waiting
             && (profileId == nil || items[i].profileId == profileId) {
-            items[i].resetsAt = Date.distantPast
+            _ = Self.forceDue(&items[i])
         }
+        lastExecution = .distantPast
         saveState()
+    }
+
+    /// Makes one item due immediately, even while its account is limited. A failed item
+    /// (attempts used up) goes back to waiting with its attempts reset. Returns false if the
+    /// item isn't waiting or failed.
+    @discardableResult
+    public func retryNow(itemId: String) -> Bool {
+        guard let i = items.firstIndex(where: { $0.id == itemId }), Self.forceDue(&items[i]) else { return false }
+        lastExecution = .distantPast
+        saveState()
+        return true
+    }
+
+    /// Same as `retryNow(itemId:)` for the newest waiting or failed item of a chat.
+    @discardableResult
+    public func retryNow(sessionId: String) -> Bool {
+        guard let it = items.last(where: { $0.sessionId == sessionId && [.waiting, .failed].contains($0.status) })
+        else { return false }
+        return retryNow(itemId: it.id)
+    }
+
+    /// Marker for "the user asked to retry this now": due at once, ignores the account's limit.
+    static let forcedAt = Date.distantPast
+
+    /// Makes an item due at once. Waiting items keep their attempts; failed ones start over.
+    static func forceDue(_ it: inout RetryItem) -> Bool {
+        switch it.status {
+        case .waiting:
+            it.resetsAt = forcedAt
+        case .failed:
+            it.status = .waiting
+            it.attempts = 0
+            it.resetsAt = forcedAt
+            it.note = "Retrying now"
+        default:
+            return false
+        }
+        return true
+    }
+
+    /// Whether a waiting item should be sent now. `limitedUntil` is the account's reset time when it
+    /// is limited (nil otherwise). Forced items go out even while the account is still limited; if
+    /// they hit the limit again the relimited path puts them back to waiting.
+    static func isDue(_ it: RetryItem, limitedUntil: Date?, retryDelay: TimeInterval, now: Date) -> Bool {
+        guard it.status == .waiting else { return false }
+        if it.resetsAt == forcedAt { return true }
+        guard now >= (it.resetsAt ?? now).addingTimeInterval(retryDelay) else { return false }
+        if let until = limitedUntil, until > now { return false }
+        return true
+    }
+
+    /// A waiting item's chat moved on without us. After we've sent once, a trailing user prompt may be
+    /// our own message, so only a reply counts then.
+    static func continuedManually(_ it: RetryItem, tail: TranscriptTail) -> Bool {
+        guard tail.last != .rateLimited, let at = tail.lastAt, at > it.failedAt else { return false }
+        if let sent = it.lastAttemptAt, tail.last == .userPrompt || at <= sent { return false }
+        return true
     }
 
     public func dismiss(itemId: String) {
@@ -68,8 +126,14 @@ public final class RetryEngine {
         let request = Paths.support.appendingPathComponent("retry-request")
         if let who = try? String(contentsOf: request, encoding: .utf8) {
             try? FileManager.default.removeItem(at: request)
+            // "*" or "" = all, "item:<sessionId or item id>" = one chat, anything else = a profile id.
             let id = who.trimmingCharacters(in: .whitespacesAndNewlines)
-            retryNow(profileId: id == "*" || id.isEmpty ? nil : id)
+            if id.hasPrefix("item:") {
+                let key = String(id.dropFirst(5))
+                if !retryNow(itemId: key) { retryNow(sessionId: key) }
+            } else {
+                retryNow(profileId: id == "*" || id.isEmpty ? nil : id)
+            }
             lastExecution = .distantPast
         }
         let byId = Dictionary(statuses.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -114,7 +178,7 @@ public final class RetryEngine {
             let tail = s.tail
             switch it.status {
             case .waiting:
-                if tail.last != .rateLimited, let at = tail.lastAt, at > it.failedAt {
+                if Self.continuedManually(it, tail: tail) {
                     items[i].status = .resolved
                     items[i].note = "Continued manually"
                     changed = true
@@ -148,13 +212,9 @@ public final class RetryEngine {
         // 3. Execute at most one due item per poll (UI automation must be serialised).
         if now.timeIntervalSince(lastExecution) > 8,
            let i = items.indices.first(where: { idx in
-               let it = items[idx]
-               guard it.status == .waiting else { return false }
-               let due = (it.resetsAt ?? now).addingTimeInterval(config.retryDelaySeconds)
-               guard now >= due else { return false }
-               if let a = acct[it.profileId], a.state == .limited, (a.limitedUntil ?? .distantFuture) > now,
-                  it.resetsAt != .distantPast { return false }
-               return true
+               let a = acct[items[idx].profileId]
+               return Self.isDue(items[idx], limitedUntil: a?.state == .limited ? (a?.limitedUntil ?? .distantFuture) : nil,
+                                 retryDelay: config.retryDelaySeconds, now: now)
            }) {
             let mode = acct[items[i].profileId]?.retryMode ?? config.retryMode(for: items[i].profileId)
             let profile = profiles.first { $0.id == items[i].profileId }

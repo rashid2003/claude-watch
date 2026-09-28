@@ -32,6 +32,8 @@ This builds `~/Applications/ClaudeWatch.app` (menu bar, no Dock icon) and
 claude-watch                  # live dashboard: q quit · r refresh · R retry due chats now
 claude-watch status [--json]  # one-shot
 claude-watch queue [--stats]  # retry queue / UI-vs-CLI success comparison
+claude-watch retry [profile]  # retry waiting chats now, even while the account is still limited
+claude-watch retry --item <session-id>  # retry one queued chat now (also restarts one that gave up)
 claude-watch mode <profile> ui|cli|off
 claude-watch probe [profile]  # dry-run of the UI path: opens a chat, types nothing
 claude-watch set-token <profile>

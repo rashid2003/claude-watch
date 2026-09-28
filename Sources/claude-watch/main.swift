@@ -78,6 +78,28 @@ func activityLabel(_ a: SessionStatus.Activity) -> String {
 
 // MARK: - Rendering
 
+func queueIsActive(_ it: RetryItem) -> Bool { [.waiting, .running, .verifying].contains(it.status) }
+
+/// Active items plus the last few finished ones, one line each. `name` labels items outside an account.
+func queueLines(_ items: [RetryItem], recentCount: Int, width w: Int, now: Date,
+                name: ((RetryItem) -> String)? = nil) -> [String] {
+    var out: [String] = []
+    for it in items.filter(queueIsActive) {
+        var when = ""
+        if it.status == .waiting, let r = it.resetsAt { when = r > now ? "in " + Fmt.duration(r.timeIntervalSince(now)) : "due" }
+        else if it.status == .verifying { when = "checking reply…" }
+        let label = name.map { A.pad(A.trunc($0(it), 16), 17) } ?? ""
+        out.append("  " + A.clay("⟳") + " " + label + A.trunc(it.title, max(10, w - 44))
+                   + "  " + A.dim(when) + (it.note.map { A.dim(" · " + $0) } ?? ""))
+    }
+    for it in items.filter({ !queueIsActive($0) }).suffix(recentCount) {
+        let mark = it.status == .done ? A.green("✓") : it.status == .failed ? A.red("✗") : A.dim("–")
+        let label = name.map { A.pad(A.trunc($0(it), 16), 17) } ?? ""
+        out.append("  " + mark + " " + A.dim(label + A.trunc(it.title, max(10, w - 30)) + (it.note.map { " · " + $0 } ?? "")))
+    }
+    return out
+}
+
 func render(_ snap: Snapshot, width: Int, detailed: Bool = true) -> String {
     let now = Date()
     var out: [String] = []
@@ -121,25 +143,20 @@ func render(_ snap: Snapshot, width: Int, detailed: Bool = true) -> String {
                 out.append("      " + A.dim(A.trunc(hit.text, w - 10)))
             }
         }
+        let queued = queueLines(snap.queue.filter { a.memberProfileIds.contains($0.profileId) },
+                                recentCount: 2, width: w, now: now)
+        if !queued.isEmpty { out.append("  " + A.dim("retry queue")); out += queued }
         out.append("")
     }
 
-    let active = snap.queue.filter { [.waiting, .running, .verifying].contains($0.status) }
-    let recent = snap.queue.filter { ![.waiting, .running, .verifying].contains($0.status) }.suffix(3)
-    if !active.isEmpty || !recent.isEmpty {
-        out.append(A.bold("Retry queue"))
-        for it in active {
-            let name = snap.accounts.first { $0.id == it.profileId }?.profile.name ?? it.profileId
-            var when = ""
-            if it.status == .waiting, let r = it.resetsAt, r > .distantPast { when = r > now ? "in " + Fmt.duration(r.timeIntervalSince(now)) : "due" }
-            else if it.status == .verifying { when = "checking reply…" }
-            out.append("  " + A.clay("⟳") + " " + A.pad(A.trunc(name, 16), 17) + A.trunc(it.title, max(10, w - 44))
-                       + "  " + A.dim(when) + (it.note.map { A.dim(" · " + $0) } ?? ""))
-        }
-        for it in recent {
-            let mark = it.status == .done ? A.green("✓") : it.status == .failed ? A.red("✗") : A.dim("–")
-            out.append("  " + mark + " " + A.dim(A.trunc(it.title, max(10, w - 30)) + (it.note.map { " · " + $0 } ?? "")))
-        }
+    // Items whose profile isn't under any account, so nothing disappears.
+    let other = snap.queue.filter { it in !snap.accounts.contains { $0.memberProfileIds.contains(it.profileId) } }
+    let lines = queueLines(other, recentCount: 3, width: w, now: now) { it in
+        snap.profiles.first { $0.id == it.profileId }?.name ?? it.profileId
+    }
+    if !lines.isEmpty {
+        out.append(A.bold("Retry queue") + A.dim(" · other profiles"))
+        out += lines
         out.append("")
     }
     return out.joined(separator: "\n")
@@ -156,7 +173,9 @@ func usage() -> Never {
       claude-watch                     live dashboard (q quit, r refresh, R retry due chats now)
       claude-watch status [--json]     one-shot snapshot
       claude-watch queue [--stats]     retry queue, or UI-vs-CLI success stats
-      claude-watch retry [profile]     retry waiting chats now (all or one profile)
+      claude-watch retry [profile]     retry waiting chats now (all or one profile), even if still limited
+      claude-watch retry --item <chat> retry one queued chat now (session id local_…, see `queue`);
+                                       also restarts a chat that gave up
       claude-watch probe [profile]     dry-run the UI retry path (opens a chat, types nothing)
       claude-watch mode <profile> <ui|cli|off>
       claude-watch set-token <profile> store a `claude setup-token` token for CLI retries
@@ -168,6 +187,7 @@ func usage() -> Never {
     exit(0)
 }
 
+/// Asks the retry engine (app or dashboard) to retry now: "*" all, a profile id, or "item:<sessionId>".
 func requestRetry(_ profile: String?) {
     let url = Paths.support.appendingPathComponent("retry-request")
     try? (profile ?? "*").write(to: url, atomically: true, encoding: .utf8)
@@ -236,7 +256,8 @@ case "queue":
         if snap.queue.isEmpty { print(A.dim("Queue is empty.")) }
         for it in snap.queue {
             print("\(A.pad(it.status.rawValue, 10)) \(A.pad(it.profileId, 11)) \(A.trunc(it.title, 50))"
-                  + A.dim(it.resetsAt.map { " · resets " + Fmt.time($0) } ?? "") + A.dim(it.note.map { " · " + $0 } ?? ""))
+                  + A.dim(it.resetsAt.flatMap { $0 > .distantPast ? " · resets " + Fmt.time($0) : " · due now" } ?? "")
+                  + A.dim(it.note.map { " · " + $0 } ?? "") + A.dim("  " + it.sessionId))
         }
     }
 
@@ -250,8 +271,18 @@ case "probe":
     print(UIRetry.probe(session: s, profile: p))
 
 case "retry":
-    requestRetry(args.dropFirst().first)
-    print("Requested. The retry engine will pick it up on its next poll.")
+    if let i = args.firstIndex(of: "--item") {
+        guard i + 1 < args.count, !args[i + 1].isEmpty else { usage() }
+        let key = args[i + 1]
+        let q = Monitor(ownEngine: false).engine.items
+        guard let it = q.last(where: { ($0.sessionId == key || $0.id == key) && [.waiting, .failed].contains($0.status) })
+        else { print("No waiting or failed chat \(key) in the queue (see `claude-watch queue`)."); exit(1) }
+        requestRetry("item:" + it.sessionId)
+        print("Requested a retry of “\(it.title)”. The retry engine will pick it up on its next poll.")
+    } else {
+        requestRetry(args.dropFirst().first)
+        print("Requested. The retry engine will pick it up on its next poll.")
+    }
 
 case "mode":
     guard args.count == 3, let mode = RetryMode(rawValue: args[2]) else { usage() }
