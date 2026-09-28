@@ -186,10 +186,51 @@ public enum SessionMover {
         }
     }
 
-    /// Scratch-workspace chats get their folder moved with them (step 3 of the spec).
-    /// Returns nil when the cwd is not the source profile's scratch workspace.
+    /// Scratch-workspace chats get their folder moved with them, otherwise the source window
+    /// may delete it once the chat is gone. Also moves the transcript folder so the CLI finds it
+    /// under the new cwd. Returns the new cwd, or nil when nothing moved.
     static func relocateScratch(cwd: String, src: Profile, dst: Profile, to: ChatLocation,
                                 roots: MoverRoots, backup: URL, undo: inout [() -> Void]) throws -> String? {
-        nil
+        let fm = FileManager.default
+        let real = resolve(cwd)
+        guard real.hasPrefix(resolve(src.dataDir.path) + "/scratch-workspaces/"), fm.fileExists(atPath: real) else { return nil }
+        let name = (real as NSString).lastPathComponent
+        let parent = URL(fileURLWithPath: resolve(dst.dataDir.path))
+            .appendingPathComponent("scratch-workspaces/\(to.accountUuid)/\(to.orgUuid)")
+        let newPath = parent.appendingPathComponent(name).path
+        guard !fm.fileExists(atPath: newPath) else { throw MoveError("folder \(name) already in \(to.label)", conflict: true) }
+
+        // One transcript folder per spelling of the old path; the CLI writes to the resolved one.
+        let newDir = roots.projects.appendingPathComponent(projectKey(newPath))
+        let oldDirs = Array(Set([projectKey(cwd), projectKey(real)]))
+            .map { roots.projects.appendingPathComponent($0) }
+            .filter { fm.fileExists(atPath: $0.path) }
+        guard oldDirs.isEmpty || !fm.fileExists(atPath: newDir.path) else {
+            throw MoveError("transcript folder for \(name) already exists", conflict: true)
+        }
+
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        try fm.moveItem(atPath: real, toPath: newPath)
+        undo.append { try? fm.moveItem(atPath: newPath, toPath: real) }
+
+        let newest = oldDirs.max { latestWrite($0) < latestWrite($1) }
+        for dir in oldDirs {
+            let dest = dir == newest
+                ? newDir
+                : backup.appendingPathComponent("stale-transcripts/" + dir.lastPathComponent)
+            try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.moveItem(at: dir, to: dest)
+            undo.append { try? fm.moveItem(at: dest, to: dir) }
+        }
+        return newPath
+    }
+
+    /// Most recent modification time of the transcripts directly inside a project folder.
+    static func latestWrite(_ dir: URL) -> Date {
+        let fm = FileManager.default
+        return ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? [])
+            .filter { $0.hasSuffix(".jsonl") }
+            .compactMap { (try? fm.attributesOfItem(atPath: dir.appendingPathComponent($0).path))?[.modificationDate] as? Date }
+            .max() ?? .distantPast
     }
 }
