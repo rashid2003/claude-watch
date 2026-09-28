@@ -196,6 +196,17 @@ final class MoverExecuteTests: MoveTreeCase {
         XCTAssertTrue(fm.fileExists(atPath: store.all().first!.backupDir!))
     }
 
+    func testWriteExclusive() throws {
+        let url = root.appendingPathComponent("x.json")
+        try SessionMover.writeExclusive(Data("one".utf8), to: url)
+        XCTAssertEqual(try String(contentsOf: url), "one")
+        XCTAssertThrowsError(try SessionMover.writeExclusive(Data("two".utf8), to: url)) {
+            XCTAssertTrue(($0 as? MoveError)?.conflict == true)
+        }
+        XCTAssertEqual(try String(contentsOf: url), "one")
+        XCTAssertFalse(try fm.contentsOfDirectory(atPath: root.path).contains { $0.contains(".tmp-") })
+    }
+
     func testBadSessionIdRejected() throws {
         XCTAssertThrowsError(try SessionMover.execute(sessionId: "local_../x", from: from, to: to, profiles: [p1, p2], roots: roots))
         XCTAssertFalse(fm.fileExists(atPath: roots.backups.path))

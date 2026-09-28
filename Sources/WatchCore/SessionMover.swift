@@ -185,7 +185,7 @@ public enum SessionMover {
             }
 
             try fm.createDirectory(at: dstDir, withIntermediateDirectories: true)
-            try JSONSerialization.data(withJSONObject: rec).write(to: dstURL, options: .atomic)
+            try writeExclusive(try JSONSerialization.data(withJSONObject: rec), to: dstURL)
             undo.append { try fm.removeItem(at: dstURL) }
             try fault("afterWrite")
 
@@ -201,7 +201,10 @@ public enum SessionMover {
                 try writeArchived(srcArchived.filter { $0 != sessionId }, srcDir, existing: srcIndex)
             }
 
-            undo.append { try restore(backup.appendingPathComponent("record.json"), to: srcURL) }
+            undo.append {
+                let copy = backup.appendingPathComponent("record.json")
+                if !fm.fileExists(atPath: srcURL.path) { try fm.copyItem(at: copy, to: srcURL) }
+            }
             try fm.removeItem(at: srcURL)
             try fault("end")
             return Outcome(backupDir: backup, newCwd: newCwd)
@@ -220,6 +223,19 @@ public enum SessionMover {
             }
             out.backupDir = backup.path
             throw out
+        }
+    }
+
+    /// Writes `data` to `url` atomically and never replaces an existing file: temp file, then link(2).
+    static func writeExclusive(_ data: Data, to url: URL) throws {
+        let tmp = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.lastPathComponent).tmp-\(UUID().uuidString)")
+        try data.write(to: tmp)
+        defer { unlink(tmp.path) }
+        if link(tmp.path, url.path) != 0 {
+            let code = errno
+            if code == EEXIST { throw MoveError("already exists: \(url.lastPathComponent)", conflict: true) }
+            throw MoveError("could not write \(url.lastPathComponent): \(String(cString: strerror(code)))")
         }
     }
 

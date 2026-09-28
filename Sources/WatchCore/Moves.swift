@@ -43,7 +43,9 @@ public final class MoveStore {
             let aside = url.deletingLastPathComponent()
                 .appendingPathComponent(url.lastPathComponent + ".corrupt-\(Int(Date().timeIntervalSince1970))")
             try? FileManager.default.removeItem(at: aside)
-            try? FileManager.default.moveItem(at: url, to: aside)
+            do { try FileManager.default.moveItem(at: url, to: aside) } catch {
+                return body(&list)   // never overwrite a corrupt file we could not set aside
+            }
         }
         let result = body(&list)
         let finished = list.filter { $0.status != .pending }
