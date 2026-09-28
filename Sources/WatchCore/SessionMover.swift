@@ -131,7 +131,12 @@ public enum SessionMover {
         guard var rec = JSONFile.object(at: srcURL) else { throw MoveError("chat record unreadable") }
 
         // Backup first, so a move can always be undone by hand.
-        let backup = roots.backups.appendingPathComponent(stamp(now) + "-" + sessionId)
+        var backup = roots.backups.appendingPathComponent(stamp(now) + "-" + sessionId)
+        var n = 2
+        while fm.fileExists(atPath: backup.path) {   // e.g. a move and its undo within the same second
+            backup = roots.backups.appendingPathComponent(stamp(now) + "-" + sessionId + "-\(n)")
+            n += 1
+        }
         try fm.createDirectory(at: backup, withIntermediateDirectories: true)
         try fm.copyItem(at: srcURL, to: backup.appendingPathComponent("record.json"))
         let srcIdx = srcDir.appendingPathComponent(archiveIndex), dstIdx = dstDir.appendingPathComponent(archiveIndex)

@@ -225,3 +225,55 @@ final class MoverScratchTests: MoveTreeCase {
         XCTAssertEqual(json(folder(p2, a2, o2).appendingPathComponent("local_1.json"))["cwd"] as? String, gone)
     }
 }
+
+final class MoveStoreTests: MoveTreeCase {
+    var store: MoveStore!
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        store = MoveStore(url: root.appendingPathComponent("moves.json"), roots: roots)
+    }
+
+    func testAddRejectsSecondPendingMoveForSameChat() {
+        XCTAssertNotNil(store.add(sessionId: "local_1", title: "t", from: from, to: to))
+        XCTAssertNil(store.add(sessionId: "local_1", title: "t", from: from, to: to))
+        XCTAssertEqual(store.pending.count, 1)
+    }
+
+    func testRunDueWaitsWhileAWindowRuns() throws {
+        try writeRecord("local_1", cwd: "/tmp")
+        store.add(sessionId: "local_1", title: "t", from: from, to: to)
+        XCTAssertTrue(store.runDue(profiles: [p1, p2], running: [p2.id], liveSessions: []).isEmpty)
+        XCTAssertTrue(store.runDue(profiles: [p1, p2], running: [], liveSessions: ["local_1"]).isEmpty)
+        let done = store.runDue(profiles: [p1, p2], running: [], liveSessions: [])
+        XCTAssertEqual(done.map(\.status), [.done])
+        XCTAssertNotNil(done[0].backupDir)
+        XCTAssertTrue(store.pending.isEmpty)
+    }
+
+    func testUndoMovesBackAndMarksOriginal() throws {
+        try writeRecord("local_1", cwd: "/tmp")
+        let m = store.add(sessionId: "local_1", title: "t", from: from, to: to)!
+        _ = store.runDue(profiles: [p1, p2], running: [], liveSessions: [])
+        let u = store.undo(moveId: m.id)!
+        XCTAssertEqual(u.from.id, to.id)
+        XCTAssertEqual(u.to.id, from.id)
+        XCTAssertEqual(store.runDue(profiles: [p1, p2], running: [], liveSessions: []).map(\.status), [.done])
+        XCTAssertTrue(fm.fileExists(atPath: folder(p1, a1, o1).appendingPathComponent("local_1.json").path))
+        XCTAssertEqual(store.all().first { $0.id == m.id }?.status, .undone)
+    }
+
+    func testConflictIsRecorded() throws {
+        try writeRecord("local_1", cwd: "/tmp")
+        try Data("{}".utf8).write(to: folder(p2, a2, o2).appendingPathComponent("local_1.json"))
+        store.add(sessionId: "local_1", title: "t", from: from, to: to)
+        let r = store.runDue(profiles: [p1, p2], running: [], liveSessions: [])
+        XCTAssertEqual(r.first?.status, .conflict)
+        XCTAssertNotNil(r.first?.note)
+    }
+
+    func testCancel() {
+        let m = store.add(sessionId: "local_1", title: "t", from: from, to: to)!
+        store.cancel(id: m.id)
+        XCTAssertTrue(store.all().isEmpty)
+    }
+}
