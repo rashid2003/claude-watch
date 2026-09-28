@@ -1,0 +1,13 @@
+{"type":"user","uuid":"u1","isSidechain":false,"message":{"role":"user","content":"add a **retry** button"},"timestamp":"2026-09-28T20:00:00.000Z"}
+{"type":"user","uuid":"u1m","isMeta":true,"isSidechain":false,"message":{"role":"user","content":"<system-reminder>ignore</system-reminder>"},"timestamp":"2026-09-28T20:00:00.100Z"}
+{"type":"assistant","uuid":"a1","isSidechain":false,"message":{"id":"m1","content":[{"type":"thinking","thinking":"hmm"}]},"timestamp":"2026-09-28T20:00:01.000Z"}
+{"type":"assistant","uuid":"a2","isSidechain":false,"message":{"id":"m1","content":[{"type":"text","text":"I'll build it first."}]},"timestamp":"2026-09-28T20:00:02.000Z"}
+{"type":"assistant","uuid":"a3","isSidechain":false,"message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"swift build\n--verbose","description":"Build"}}]},"timestamp":"2026-09-28T20:00:03.000Z"}
+{"type":"user","uuid":"r1","isSidechain":false,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},"timestamp":"2026-09-28T20:00:10.000Z"}
+{"type":"assistant","uuid":"a4","isSidechain":false,"message":{"id":"m2","content":[{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"/Users/x/Sources/App.swift","old_string":"a","new_string":"b"}}]},"timestamp":"2026-09-28T20:00:11.000Z"}
+{"type":"user","uuid":"r2","isSidechain":false,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"no match"}]},"timestamp":"2026-09-28T20:00:12.000Z"}
+{"type":"assistant","uuid":"s1","isSidechain":true,"message":{"id":"m3","content":[{"type":"text","text":"subagent chatter"}]},"timestamp":"2026-09-28T20:00:13.000Z"}
+{"type":"attachment","uuid":"x1","timestamp":"2026-09-28T20:00:13.500Z"}
+{"type":"assistant","uuid":"e1","isSidechain":false,"isApiErrorMessage":true,"error":"rate_limit","message":{"id":"m4","model":"<synthetic>","content":[{"type":"text","text":"You've hit your limit · resets 4:50am"}]},"timestamp":"2026-09-28T20:01:00.000Z"}
+{"type":"user","uuid":"u2","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":"continue"}]},"timestamp":"2026-09-28T21:00:00.000Z"}
+{"type":"assistant","uuid":"a5","isSidechain":false,"message":{"id":"m5","content":[{"type":"text","text":"Done — the button is in."}]},"timestamp":"2026-09-28T21:00:05.000Z"}
