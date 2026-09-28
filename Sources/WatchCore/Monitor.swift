@@ -1,0 +1,325 @@
+import Foundation
+
+public enum WatchEvent: Sendable {
+    case accountFree(Profile)
+    case limitReset(Profile)
+    case capSoon(Profile, LimitKind, Date)
+    case limited(Profile, LimitKind?, Date?)
+    case retry(RetryItem, String)   // item, human-readable message
+}
+
+/// Weighted-token time series for one account, with O(log n) range sums.
+struct AccountTokens {
+    private var keys: [Int] = []
+    private var prefix: [Double] = [0]
+
+    init(_ buckets: [TokenBuckets]) {
+        var merged: [Int: Double] = [:]
+        for b in buckets { for (k, v) in b.b { merged[k, default: 0] += v.weighted } }
+        keys = merged.keys.sorted()
+        prefix.reserveCapacity(keys.count + 1)
+        for k in keys { prefix.append(prefix.last! + merged[k]!) }
+    }
+
+    private func lowerBound(_ k: Int) -> Int {
+        var lo = 0, hi = keys.count
+        while lo < hi { let m = (lo + hi) / 2; if keys[m] < k { lo = m + 1 } else { hi = m } }
+        return lo
+    }
+
+    func sum(_ from: Date, _ to: Date) -> Double {
+        guard to > from else { return 0 }
+        let a = lowerBound(Int(from.timeIntervalSince1970 / TokenBuckets.width))
+        let b = lowerBound(Int(to.timeIntervalSince1970 / TokenBuckets.width) + 1)
+        return prefix[b] - prefix[a]
+    }
+}
+
+public final class Monitor {
+    public private(set) var config: Config
+    public private(set) var snapshot: Snapshot?
+    public var onSnapshot: ((Snapshot) -> Void)?
+    public var onEvent: ((WatchEvent) -> Void)?
+    public let engine: RetryEngine
+
+    private let queue = DispatchQueue(label: "claude-watch.monitor", qos: .utility)
+    private var timer: DispatchSourceTimer?
+    private var profiles: [Profile] = []
+    private var profilesAt: Date = .distantPast
+    private var configMtime: Date?
+    private let sessionIndex = SessionIndex()
+    private let attribution = Attribution()
+    private let scanner = TranscriptScanner()
+    private var usageCache: [String: (mtime: Date, samples: [UsageSample])] = [:]
+    private var lastStates: [String: AccountState] = [:]
+    private var pendingFree: [String: Date] = [:]
+    private var capWarned: [String: Date] = [:]   // "profile/kind" -> window reset it was warned for
+    private var firstPoll = true
+
+    public init(ownEngine: Bool = true) {
+        config = Config.load()
+        engine = RetryEngine(owner: ownEngine && EngineLock.acquire())
+        engine.onEvent = { [weak self] item, msg in self?.onEvent?(.retry(item, msg)) }
+    }
+
+    public func start() {
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now(), repeating: config.pollSeconds, leeway: .seconds(2))
+        t.setEventHandler { [weak self] in autoreleasepool { self?.poll() } }
+        timer = t
+        t.resume()
+    }
+
+    public func refreshNow() { queue.async { [weak self] in autoreleasepool { self?.poll() } } }
+
+    public func perform(_ block: @escaping (Monitor) -> Void) { queue.async { [weak self] in if let self { block(self) } } }
+
+    public func stop() { timer?.cancel(); scanner.save(); engine.saveState() }
+
+    /// Runs one poll synchronously (for `claude-watch status`).
+    public func pollOnce() -> Snapshot { queue.sync { autoreleasepool { poll() }; scanner.save(); return snapshot! } }
+
+    public func setRetryMode(_ mode: RetryMode, for profileId: String) {
+        queue.async { [self] in
+            var pc = config.profiles[profileId] ?? ProfileConfig()
+            pc.retryMode = mode
+            config.profiles[profileId] = pc
+            try? config.save()
+            configMtime = Self.mtime(Paths.config)
+            poll()
+        }
+    }
+
+    public func profile(id: String) -> Profile? { profiles.first { $0.id == id } }
+
+    private static func mtime(_ url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
+
+    private func samples(for p: Profile) -> [UsageSample] {
+        let url = p.dataDir.appendingPathComponent("plan-usage-history.json")
+        let m = Self.mtime(url) ?? .distantPast
+        if let c = usageCache[p.id], c.mtime == m { return c.samples }
+        let s = UsageHistoryReader.read(profile: p)
+        usageCache[p.id] = (m, s)
+        return s
+    }
+
+    private func poll() {
+        let now = Date()
+        if let m = Self.mtime(Paths.config), m != configMtime {
+            configMtime = m
+            config = Config.load()
+            profilesAt = .distantPast
+        }
+        if now.timeIntervalSince(profilesAt) > 300 {
+            profiles = ProfileDiscovery.discover(config: config)
+            profilesAt = now
+        }
+        let instances = ClaudeProcesses.list()
+        let runners = Runners.list()
+        let std: (String) -> String = { URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path }
+        let profileByDir = Dictionary(profiles.map { (std($0.dataDir.path), $0) }, uniquingKeysWith: { a, _ in a })
+        var profileAccount: [String: String] = [:]
+        var live = Set<String>()
+        for r in runners {
+            guard let p = profileByDir[std(r.dataDir)] else { continue }
+            attribution.record(r.sessionId, profileId: p.id)
+            live.insert(r.sessionId)
+            if let a = r.identity { profileAccount[p.id] = a }
+        }
+
+        // Chats are mirrored across profiles; pick the profile that actually runs each one.
+        var candidates: [String: [SessionInfo]] = [:]
+        for p in profiles {
+            let copies = sessionIndex.sessions(for: p)
+            if profileAccount[p.id] == nil { profileAccount[p.id] = copies.first?.accountUuid }
+            for c in copies { candidates[c.id, default: []].append(c) }
+        }
+        scanner.scan(sessions: candidates.values.map { $0[0] }, now: now)
+        let dirOf = Dictionary(profiles.map { ($0.id, std($0.dataDir.path) + "/") }, uniquingKeysWith: { a, _ in a })
+        var all: [SessionInfo] = []
+        var undecided: [[SessionInfo]] = []
+        var resetOwner: [Date: String] = [:]   // limit reset time -> profile seen hitting it
+        for (id, copies) in candidates {
+            let remembered = attribution.profile(for: id)
+            let known = copies.first { $0.profileId == remembered && (remembered != "default" || live.contains(id)) }
+                ?? copies.first { c in dirOf[c.profileId].map { Self.realPath(c.cwd).hasPrefix($0) } ?? false }
+            guard var chosen = known else { undecided.append(copies); continue }
+            if let r = scanner.tail(forCli: chosen.cliSessionId).lastRateLimit?.resetsAt { resetOwner[r] = chosen.profileId }
+            chosen.accountUuid = profileAccount[chosen.profileId] ?? chosen.accountUuid
+            all.append(chosen)
+        }
+        for copies in undecided {
+            // A chat that hit the same limit reset as a known chat ran on that account.
+            let reset = scanner.tail(forCli: copies[0].cliSessionId).lastRateLimit?.resetsAt
+            var chosen = reset.flatMap { r in resetOwner[r].flatMap { pid in copies.first { $0.profileId == pid } } }
+                ?? copies.max { a, b in
+                    // The default profile is only a fallback window; prefer the named launchers.
+                    (a.profileId == "default" ? 0 : 1, a.recordModifiedAt) < (b.profileId == "default" ? 0 : 1, b.recordModifiedAt)
+                }!
+            chosen.accountUuid = profileAccount[chosen.profileId] ?? chosen.accountUuid
+            all.append(chosen)
+        }
+        all.sort { $0.lastActivityAt > $1.lastActivityAt }
+        attribution.save()
+
+        var byAccount: [String: [SessionInfo]] = [:]
+        for s in all { byAccount[s.accountUuid, default: []].append(s) }
+
+        // Profiles signed into the same account are shown as one account.
+        var groups: [(key: String, members: [Profile])] = []
+        for p in profiles {
+            let key = profileAccount[p.id] ?? "profile:" + p.id
+            if let i = groups.firstIndex(where: { $0.key == key }) { groups[i].members.append(p) }
+            else { groups.append((key, [p])) }
+        }
+
+        var accounts: [AccountStatus] = []
+        var allStatuses: [SessionStatus] = []
+        for g in groups {
+            let p = g.members.first { !$0.isDefault } ?? g.members[0]
+            let memberIds = Set(g.members.map(\.id))
+            let accountUuid = g.key.hasPrefix("profile:") ? nil : g.key
+            let accountSessions = accountUuid.flatMap { byAccount[$0] } ?? []
+            let acct = AccountTokens(accountSessions.map { scanner.buckets(for: $0.id) })
+
+            // A limit error only counts while nothing on the account has succeeded since.
+            let tails = accountSessions.map { scanner.tail(for: $0) }
+            let lastSuccess = tails.compactMap(\.lastSuccessAt).max() ?? .distantPast
+            let allHits = tails.compactMap(\.lastRateLimit).filter { now.timeIntervalSince($0.at) < 8 * 86400 }
+            let hits = allHits.filter { $0.at > lastSuccess }
+            // Use whichever member window sampled usage most recently.
+            let org = accountUuid?.split(separator: "/").last.map(String.init)
+            let usage = g.members.map { m in samples(for: m).filter { org == nil || $0.org == org } }
+                .max { ($0.last?.t ?? .distantPast) < ($1.last?.t ?? .distantPast) } ?? []
+            let five = Forecaster.forecast(samples: usage, window: .fiveHour, rateLimits: allHits,
+                                           tokens: acct.sum, now: now)
+            let week = Forecaster.forecast(samples: usage, window: .weekly, rateLimits: allHits,
+                                           tokens: acct.sum, now: now)
+
+            var statuses: [SessionStatus] = []
+            for s in accountSessions where !s.isArchived && memberIds.contains(s.profileId) {
+                let tail = scanner.tail(for: s)
+                var activity = Self.activity(session: s, tail: tail,
+                                             transcriptMtime: s.cliSessionId.flatMap(scanner.transcriptURL).flatMap(Self.mtime),
+                                             now: now)
+                if activity == .idle, live.contains(s.id), let at = tail.lastAt, now.timeIntervalSince(at) < 1800,
+                   tail.last != .assistantDone { activity = .working }
+                let recent = now.timeIntervalSince(s.lastActivityAt) < 24 * 3600
+                guard recent || activity != .idle else { continue }
+                let b = scanner.buckets(for: s.id)
+                statuses.append(SessionStatus(
+                    info: s, activity: activity, tail: tail,
+                    tasks: s.cliSessionId.map(TaskReader.tasks) ?? [],
+                    tokens5h: b.sum(from: now.addingTimeInterval(-5 * 3600)).weighted,
+                    tokens7d: b.sum(from: now.addingTimeInterval(-7 * 86400)).weighted))
+            }
+            statuses.sort { a, b in
+                let rank: (SessionStatus.Activity) -> Int = { [.working: 0, .waiting: 1, .failed: 2, .idle: 3][$0]! }
+                return rank(a.activity) != rank(b.activity) ? rank(a.activity) < rank(b.activity)
+                                                              : a.info.lastActivityAt > b.info.lastActivityAt
+            }
+            allStatuses += statuses
+
+            let pid = ClaudeProcesses.pid(for: p, in: instances)
+                ?? g.members.lazy.compactMap { ClaudeProcesses.pid(for: $0, in: instances) }.first
+            let activeHit = hits.filter { ($0.resetsAt ?? .distantPast) > now }.max { ($0.resetsAt ?? now) < ($1.resetsAt ?? now) }
+            var limitedUntil = activeHit?.resetsAt
+            var kind = activeHit?.kind
+            let fresh: (LimitForecast) -> Bool = { f in (f.sampleAt.map { now.timeIntervalSince($0) < 1800 } ?? false) }
+            // At 100% the account stays limited until the window's reset, however old the sample.
+            let capped: (LimitForecast) -> Bool = { f in
+                (f.percent ?? 0) >= 100 && (f.resetsAt.map { $0 > now } ?? fresh(f))
+            }
+            if limitedUntil == nil, capped(week) {
+                limitedUntil = week.resetsAt; kind = .weekly
+            } else if limitedUntil == nil, capped(five) {
+                limitedUntil = five.resetsAt; kind = .fiveHour
+            }
+            let isLimited = activeHit != nil || kind != nil
+            let working = statuses.contains { $0.activity == .working }
+            let state: AccountState = isLimited ? .limited : working ? .working : (pid != nil ? .free : .offline)
+
+            accounts.append(AccountStatus(
+                profile: p, memberProfileIds: g.members.map(\.id),
+                alsoOpenIn: g.members.filter { $0.id != p.id }.map(\.name),
+                accountUuid: accountUuid, running: pid != nil, pid: pid, state: state,
+                limitedUntil: limitedUntil, limitKind: isLimited ? kind : nil,
+                fiveHour: five, weekly: week,
+                tokens5h: acct.sum(now.addingTimeInterval(-5 * 3600), now),
+                tokens7d: acct.sum(now.addingTimeInterval(-7 * 86400), now),
+                tokensPerHourNow: acct.sum(now.addingTimeInterval(-1800), now) * 2,
+                sessions: Array(statuses.prefix(10)),
+                retryMode: config.retryMode(for: p.id)))
+        }
+
+        engine.update(statuses: allStatuses, accounts: accounts, profiles: profiles,
+                      config: config, scanner: scanner, now: now)
+        emitTransitions(accounts, now: now)
+        firstPoll = false
+
+        let snap = Snapshot(at: now, accounts: accounts, queue: engine.items,
+                            engineOwner: engine.owner, scanning: false)
+        snapshot = snap
+        onSnapshot?(snap)
+    }
+
+    /// Resolves compatibility symlinks (e.g. ~/Claude-Profiles/account-1 -> claude-3-…).
+    static func realPath(_ path: String) -> String {
+        var url = URL(fileURLWithPath: path)
+        var tail: [String] = []
+        while !FileManager.default.fileExists(atPath: url.path), url.pathComponents.count > 1 {
+            tail.insert(url.lastPathComponent, at: 0)
+            url.deleteLastPathComponent()
+        }
+        return tail.reduce(url.resolvingSymlinksInPath()) { $0.appendingPathComponent($1) }.path
+    }
+
+    static func activity(session s: SessionInfo, tail: TranscriptTail, transcriptMtime: Date?, now: Date) -> SessionStatus.Activity {
+        if tail.last == .rateLimited { return .failed }
+        if s.hasPendingPermission { return .waiting }
+        if let m = transcriptMtime, now.timeIntervalSince(m) < 30 { return .working }
+        switch tail.last {
+        case .userPrompt, .toolResult, .assistantTool:
+            if let at = tail.lastAt, now.timeIntervalSince(at) < 600 { return .working }
+        default: break
+        }
+        return .idle
+    }
+
+    private func emitTransitions(_ accounts: [AccountStatus], now: Date) {
+        for a in accounts {
+            let prev = lastStates[a.id]
+            lastStates[a.id] = a.state
+            if a.state != .free { pendingFree[a.id] = nil }
+            if !firstPoll, let prev, prev != a.state {
+                switch (prev, a.state) {
+                case (.limited, _): onEvent?(.limitReset(a.profile))
+                case (_, .limited): onEvent?(.limited(a.profile, a.limitKind, a.limitedUntil))
+                case (.working, .free): pendingFree[a.id] = now
+                default: break
+                }
+            }
+            // Only announce "free" once it has stayed idle for a minute (tool calls flap).
+            if let since = pendingFree[a.id], now.timeIntervalSince(since) >= 60 {
+                pendingFree[a.id] = nil
+                onEvent?(.accountFree(a.profile))
+            }
+            checkCapSoon(a, now: now)
+        }
+    }
+
+    private func checkCapSoon(_ a: AccountStatus, now: Date) {
+        guard a.state != .limited else { return }
+        for (kind, f) in [(LimitKind.fiveHour, a.fiveHour), (.weekly, a.weekly)] {
+            guard let hits = f.hitsAt, !f.resetsFirst,
+                  hits.timeIntervalSince(now) < config.warnBeforeCapMinutes * 60 else { continue }
+            let key = a.id + "/" + kind.rawValue
+            let windowKey = f.resetsAt ?? hits
+            if let w = capWarned[key], abs(w.timeIntervalSince(windowKey)) < 1800 { continue }
+            capWarned[key] = windowKey
+            onEvent?(.capSoon(a.profile, kind, hits))
+        }
+    }
+}

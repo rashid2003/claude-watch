@@ -1,0 +1,6 @@
+{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"fix the bug"},"timestamp":"2026-09-28T20:00:00.000Z","sessionId":"s1"}
+{"parentUuid":"a","isSidechain":false,"type":"assistant","message":{"id":"msg_1","model":"claude-opus-5-5","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":100,"cache_read_input_tokens":1000}},"timestamp":"2026-09-28T20:00:05.000Z"}
+{"parentUuid":"b","isSidechain":false,"type":"assistant","message":{"id":"msg_1","model":"claude-opus-5-5","stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":50,"cache_creation_input_tokens":100,"cache_read_input_tokens":1000}},"timestamp":"2026-09-28T20:00:06.000Z"}
+{"parentUuid":"c","isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]},"timestamp":"2026-09-28T20:00:10.000Z"}
+{"type":"file-history-snapshot","messageId":"x"}
+{"parentUuid":"d","isSidechain":false,"type":"assistant","message":{"id":"msg_2","model":"<synthetic>","content":[{"type":"text","text":"You've hit your session limit · resets 4:50am (UTC)"}],"usage":{"input_tokens":0,"output_tokens":0}},"timestamp":"2026-09-28T20:01:00.000Z","error":"rate_limit","isApiErrorMessage":true,"quotaLimits":{"status":"rejected","resetsAt":1790641200,"rateLimitType":"five_hour"}}
