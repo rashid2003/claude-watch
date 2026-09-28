@@ -110,23 +110,31 @@ public final class Monitor {
 
     public func cancelMove(_ id: String) { moves.cancel(id: id); refreshNow() }
 
-    /// Quits the windows involved in pending moves, runs the moves, and reopens those windows
-    /// plus each destination. Blocking; call it off the main thread and never from `perform`.
-    public func restartAndRunMoves() -> (stuck: [Profile], finished: [PendingMove]) {
-        let (pending, profs) = queue.sync { (moves.pending, profiles) }
+    /// Quits the windows of the confirmed moves (`only moveIds`), runs those moves, and reopens
+    /// the windows that quit plus each destination. Other pending moves are left to `poll`.
+    /// `waiting` lists confirmed moves still pending afterwards (a window didn't quit, or the
+    /// chat's CLI process is still alive). Blocking; call it off the main thread and never from `perform`.
+    public func restartAndRunMoves(only moveIds: Set<String>)
+        -> (stuck: [Profile], finished: [PendingMove], waiting: [PendingMove]) {
+        let (pending, profs) = queue.sync { (moves.pending.filter { moveIds.contains($0.id) }, profiles) }
+        guard !pending.isEmpty else { return ([], [], []) }
         let ids = Set(pending.flatMap { [$0.from.profileId, $0.to.profileId] })
         let (quit, stuck) = WindowControl.quit(profs.filter { ids.contains($0.id) })
-        let finished = queue.sync { runDueMoves(instances: ClaudeProcesses.list(), runners: Runners.list(), now: Date()) }
+        let (finished, waiting) = queue.sync {
+            (runDueMoves(instances: ClaudeProcesses.list(), runners: Runners.list(), now: Date(), only: moveIds),
+             moves.pending.filter { moveIds.contains($0.id) })
+        }
         WindowControl.relaunch(profs.filter { p in quit.contains(p) || pending.contains { $0.to.profileId == p.id } })
         refreshNow()
-        return (stuck, finished)
+        return (stuck, finished, waiting)
     }
 
-    private func runDueMoves(instances: [ClaudeProcesses.Instance], runners: [Runner], now: Date) -> [PendingMove] {
+    private func runDueMoves(instances: [ClaudeProcesses.Instance], runners: [Runner], now: Date,
+                             only: Set<String>? = nil) -> [PendingMove] {
         guard !moves.pending.isEmpty else { return [] }
         let running = Set(profiles.filter { ClaudeProcesses.pid(for: $0, in: instances) != nil }.map(\.id))
         let finished = moves.runDue(profiles: profiles, running: running,
-                                    liveSessions: Set(runners.map(\.sessionId)), now: now)
+                                    liveSessions: Set(runners.map(\.sessionId)), only: only, now: now)
         for m in finished {
             if m.status == .done { attribution.record(m.sessionId, profileId: m.to.profileId) }
             onEvent?(.moved(m))

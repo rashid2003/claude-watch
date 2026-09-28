@@ -335,15 +335,17 @@ case "move":
         exit(1)
     }
     guard let m = MoveStore().add(sessionId: chat.id, title: chat.title, from: chat.location, to: dests[0]) else {
-        print("That chat already has a pending move (see `claude-watch moves`)."); exit(1)
+        print("Couldn't queue it: the chat already has a pending move (see `claude-watch moves`), or moves.json couldn't be saved.")
+        exit(1)
     }
     print("Queued \(m.id): “\(chat.title)”  \(chat.location.label) → \(dests[0].label)")
     if args.contains("--now") {
         let monitor = Monitor(ownEngine: false)
         _ = monitor.pollOnce()
         print("Restarting \(Set([m.from.profileName, m.to.profileName]).sorted().joined(separator: " and "))…")
-        let r = monitor.restartAndRunMoves()
+        let r = monitor.restartAndRunMoves(only: [m.id])
         for s in r.stuck { print(A.yellow("\(s.name) didn't quit; the move runs once it's closed.")) }
+        for w in r.waiting { print(A.yellow(w.waitingMessage)) }
         for f in r.finished {
             print(f.status == .done ? A.green("✓ moved “\(f.title)”") : A.red("✗ \(f.title): \(f.note ?? f.status.rawValue)"))
         }
@@ -354,7 +356,7 @@ case "move":
 case "moves":
     let store = MoveStore()
     if let i = args.firstIndex(of: "--undo"), i + 1 < args.count {
-        guard let m = store.undo(moveId: args[i + 1]) else { print("No finished move \(args[i + 1])."); exit(1) }
+        guard let m = store.undo(moveId: args[i + 1]) else { print("No finished move \(args[i + 1]), or it couldn't be queued."); exit(1) }
         print("Queued undo \(m.id): “\(m.title)”  \(m.from.label) → \(m.to.label). Runs once both windows are closed.")
     } else if let i = args.firstIndex(of: "--cancel"), i + 1 < args.count {
         store.cancel(id: args[i + 1])

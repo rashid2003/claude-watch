@@ -30,8 +30,10 @@ public final class MoveStore {
 
     public var pending: [PendingMove] { all().filter { $0.status == .pending } }
 
+    /// Runs `body` on the list under the lock and writes the result back. `saved` is false when
+    /// nothing was written (a corrupt file could not be set aside, or the write failed).
     @discardableResult
-    func update<T>(_ body: (inout [PendingMove]) -> T) -> T {
+    func update<T>(_ body: (inout [PendingMove]) -> T) -> (value: T, saved: Bool) {
         let fd = open(url.path + ".lock", O_CREAT | O_RDWR, 0o644)
         if fd >= 0 { flock(fd, LOCK_EX) }
         defer { if fd >= 0 { flock(fd, LOCK_UN); close(fd) } }
@@ -44,7 +46,7 @@ public final class MoveStore {
                 .appendingPathComponent(url.lastPathComponent + ".corrupt-\(Int(Date().timeIntervalSince1970))")
             try? FileManager.default.removeItem(at: aside)
             do { try FileManager.default.moveItem(at: url, to: aside) } catch {
-                return body(&list)   // never overwrite a corrupt file we could not set aside
+                return (body(&list), false)   // never overwrite a corrupt file we could not set aside
             }
         }
         let result = body(&list)
@@ -53,15 +55,16 @@ public final class MoveStore {
             let drop = Set(finished.prefix(finished.count - Self.keepFinished).map(\.id))
             list.removeAll { drop.contains($0.id) }
         }
-        if let data = try? JSONCoder.pretty.encode(File(moves: list)) { try? data.write(to: url, options: .atomic) }
-        return result
+        guard let data = try? JSONCoder.pretty.encode(File(moves: list)),
+              (try? data.write(to: url, options: .atomic)) != nil else { return (result, false) }
+        return (result, true)
     }
 
-    /// Queues a move. Returns nil if the chat already has one pending.
+    /// Queues a move. Returns nil if the chat already has one pending or the move could not be saved.
     @discardableResult
     public func add(sessionId: String, title: String, from: ChatLocation, to: ChatLocation,
                     undoOf: String? = nil, now: Date = Date()) -> PendingMove? {
-        update { list in
+        let r = update { list -> PendingMove? in
             guard !list.contains(where: { $0.sessionId == sessionId && $0.status == .pending }) else { return nil }
             let id = "mv-\(Int(now.timeIntervalSince1970))-" + UUID().uuidString.prefix(4).lowercased()
             let m = PendingMove(id: id, sessionId: sessionId, title: title, from: from, to: to,
@@ -69,25 +72,27 @@ public final class MoveStore {
             list.append(m)
             return m
         }
+        return r.saved ? r.value : nil
     }
 
     public func cancel(id: String) {
         update { $0.removeAll { $0.id == id && $0.status == .pending } }
     }
 
-    /// Queues the reverse of a finished move.
+    /// Queues the reverse of a finished move. Nil if there is none or it could not be saved.
     public func undo(moveId: String) -> PendingMove? {
         guard let m = all().first(where: { $0.id == moveId && $0.status == .done }) else { return nil }
         return add(sessionId: m.sessionId, title: m.title, from: m.to, to: m.from, undoOf: m.id)
     }
 
     /// Runs every pending move whose source and destination windows are both closed and whose
-    /// chat has no live CLI process. Returns the moves that finished (done, failed or conflict).
+    /// chat has no live CLI process (only those in `only`, when given). Returns the moves that
+    /// finished (done, failed or conflict).
     public func runDue(profiles: [Profile], running: Set<String>, liveSessions: Set<String>,
-                       now: Date = Date()) -> [PendingMove] {
+                       only: Set<String>? = nil, now: Date = Date()) -> [PendingMove] {
         update { list in
             var finished: [PendingMove] = []
-            for i in list.indices where list[i].status == .pending {
+            for i in list.indices where list[i].status == .pending && only.map({ $0.contains(list[i].id) }) ?? true {
                 let m = list[i]
                 guard !running.contains(m.from.profileId), !running.contains(m.to.profileId),
                       !liveSessions.contains(m.sessionId) else { continue }
@@ -110,6 +115,14 @@ public final class MoveStore {
                 finished.append(list[i])
             }
             return finished
-        }
+        }.value
+    }
+}
+
+extension PendingMove {
+    /// "“Title” is still waiting to move — it runs once One and Two are closed."
+    public var waitingMessage: String {
+        let windows = from.profileName == to.profileName ? from.profileName : "\(from.profileName) and \(to.profileName)"
+        return "“\(title)” is still waiting to move — it runs once \(windows) \(from.profileName == to.profileName ? "is" : "are") closed"
     }
 }

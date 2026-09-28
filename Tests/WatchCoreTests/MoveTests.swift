@@ -196,6 +196,15 @@ final class MoverExecuteTests: MoveTreeCase {
         XCTAssertTrue(fm.fileExists(atPath: store.all().first!.backupDir!))
     }
 
+    func testProcessDirMatchesThroughSymlink() throws {
+        let link = root.appendingPathComponent("account-1")
+        try fm.createSymbolicLink(at: link, withDestinationURL: p1.dataDir)
+        XCTAssertEqual(ClaudeProcesses.canonical(link.path + "/"), ClaudeProcesses.canonical(p1.dataDir.path))
+        let instances = [ClaudeProcesses.Instance(pid: 42, dataDir: link.path)]
+        XCTAssertEqual(ClaudeProcesses.pid(for: p1, in: instances), 42)
+        XCTAssertNil(ClaudeProcesses.pid(for: p2, in: instances))
+    }
+
     func testWriteExclusive() throws {
         let url = root.appendingPathComponent("x.json")
         try SessionMover.writeExclusive(Data("one".utf8), to: url)
@@ -368,6 +377,47 @@ final class MoveStoreTests: MoveTreeCase {
         XCTAssertEqual(files.count, 1)
         XCTAssertEqual(try String(contentsOf: root.appendingPathComponent(files[0])), "garbage")
         XCTAssertEqual(store.all().map(\.id), [m!.id])
+    }
+
+    func testAddAndUndoReturnNilWhenNotSaved() throws {
+        // Write fails: the store's folder does not exist.
+        let nowhere = MoveStore(url: root.appendingPathComponent("missing/moves.json"), roots: roots)
+        XCTAssertNil(nowhere.add(sessionId: "local_1", title: "t", from: from, to: to))
+
+        // Corrupt file that can't be set aside (read-only folder): nothing is saved or overwritten.
+        let dir = root.appendingPathComponent("ro")
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let ro = MoveStore(url: dir.appendingPathComponent("moves.json"), roots: roots)
+        try Data("garbage".utf8).write(to: ro.url)
+        try Data().write(to: URL(fileURLWithPath: ro.url.path + ".lock"))
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+        XCTAssertNil(ro.add(sessionId: "local_1", title: "t", from: from, to: to))
+        XCTAssertEqual(try String(contentsOf: ro.url), "garbage")
+
+        // Undo of a finished move whose save fails.
+        try writeRecord("local_2", cwd: "/tmp")
+        let m = store.add(sessionId: "local_2", title: "t", from: from, to: to)!
+        _ = store.runDue(profiles: [p1, p2], running: [], liveSessions: [])
+        try fm.removeItem(at: store.url)
+        try fm.createDirectory(at: store.url, withIntermediateDirectories: false)   // a folder where the file goes
+        XCTAssertNil(store.undo(moveId: m.id))
+    }
+
+    func testRunDueOnlyRunsSelectedMoves() throws {
+        try writeRecord("local_1", cwd: "/tmp")
+        try writeRecord("local_2", cwd: "/tmp")
+        let a = store.add(sessionId: "local_1", title: "a", from: from, to: to)!
+        let b = store.add(sessionId: "local_2", title: "b", from: from, to: to)!
+        let done = store.runDue(profiles: [p1, p2], running: [], liveSessions: [], only: [a.id])
+        XCTAssertEqual(done.map(\.id), [a.id])
+        XCTAssertEqual(store.pending.map(\.id), [b.id])
+    }
+
+    func testWaitingMessage() {
+        var m = store.add(sessionId: "local_1", title: "Fix it", from: from, to: to)!
+        m.from.profileName = "One"; m.to.profileName = "Two"
+        XCTAssertEqual(m.waitingMessage, "“Fix it” is still waiting to move — it runs once One and Two are closed")
     }
 
     func testCancel() {

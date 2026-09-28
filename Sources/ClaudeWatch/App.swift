@@ -173,13 +173,15 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
             guard w.runModal() == .alertFirstButtonReturn else { return }
         }
         DispatchQueue.global(qos: .userInitiated).async { [monitor] in
-            let r = monitor.restartAndRunMoves()
-            for p in r.stuck {
+            let r = monitor.restartAndRunMoves(only: Set(queued.map(\.id)))
+            func notify(_ title: String, _ body: String) {
                 let c = UNMutableNotificationContent()
-                c.title = "\(p.name) didn't quit"
-                c.body = "The move runs once you close it."
+                c.title = title
+                c.body = body
                 UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
             }
+            for p in r.stuck { notify("\(p.name) didn't quit", "The move runs once you close it.") }
+            for m in r.waiting { notify("Move waiting", m.waitingMessage) }
         }
     }
 }

@@ -46,10 +46,13 @@ public enum ClaudeProcesses {
 
     public static func pid(for profile: Profile, in instances: [Instance]) -> Int32? {
         if profile.isDefault { return instances.first(where: { $0.dataDir == nil })?.pid }
-        let want = profile.dataDir.standardizedFileURL.path
-        return instances.first(where: {
-            guard let d = $0.dataDir else { return false }
-            return URL(fileURLWithPath: d).standardizedFileURL.path == want
-        })?.pid
+        let want = canonical(profile.dataDir.path)
+        return instances.first(where: { $0.dataDir.map { canonical($0) == want } ?? false })?.pid
+    }
+
+    /// Resolves symlinks and standardizes, so a window launched through a compatibility link
+    /// (e.g. ~/Claude-Profiles/account-1 -> claude-3-…) matches its profile folder.
+    static func canonical(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
     }
 }
