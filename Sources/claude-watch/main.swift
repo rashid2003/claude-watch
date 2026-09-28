@@ -161,6 +161,9 @@ func usage() -> Never {
       claude-watch mode <profile> <ui|cli|off>
       claude-watch set-token <profile> store a `claude setup-token` token for CLI retries
       claude-watch profiles            list discovered profiles
+      claude-watch move <chat> --to <profile>[:<org>] [--from <profile>] [--now]
+                                       move a chat (id or title words) to another window
+      claude-watch moves [--undo <id> | --cancel <id>]
     """)
     exit(0)
 }
@@ -265,6 +268,82 @@ case "set-token":
     guard let raw = String(validatingUTF8: getpass("")), !raw.isEmpty else { print("Nothing stored."); exit(1) }
     print(TokenStore.set(raw.trimmingCharacters(in: .whitespacesAndNewlines), for: args[1])
           ? A.green("Stored in Keychain.") : A.red("Couldn't write to Keychain."))
+
+case "move":
+    guard let toAt = args.firstIndex(of: "--to"), toAt + 1 < args.count else { usage() }
+    let firstFlag = args.dropFirst().firstIndex { $0.hasPrefix("--") } ?? args.count
+    let query = args[1..<firstFlag].joined(separator: " ")
+    guard !query.isEmpty else { usage() }
+    let fromArg = args.firstIndex(of: "--from").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+    let cfg = Config.load()
+    let profiles = ProfileDiscovery.discover(config: cfg)
+    let locs = SessionMover.locations(profiles: profiles, config: cfg)
+    // "2" matches claude-2-…; a full id matches itself.
+    func profileMatches(_ id: String, _ arg: String) -> Bool { id == arg || id.hasPrefix("claude-\(arg)-") }
+    let sources = locs.filter { l in fromArg.map { profileMatches(l.profileId, $0) } ?? (l.profileId != "default") }
+    let matches = sources.flatMap { l -> [ChatRecord] in
+        guard let p = profiles.first(where: { $0.id == l.profileId }) else { return [] }
+        return SessionMover.listChats(at: l, profile: p)
+            .filter { $0.id == query || $0.title.localizedCaseInsensitiveContains(query) }
+    }
+    guard !matches.isEmpty else { print("No chat matches “\(query)”."); exit(1) }
+    guard matches.count == 1 else {
+        print("Several chats match. Use the chat id (and --from <profile>):")
+        for c in matches.prefix(20) { print("  \(c.id)  \(A.pad(A.trunc(c.title, 40), 41)) \(A.dim(c.location.label))") }
+        exit(1)
+    }
+    let chat = matches[0]
+    let target = args[toAt + 1].split(separator: ":", maxSplits: 1).map(String.init)
+    let options = SessionMover.destinations(for: chat.location, in: locs)
+    let dests = options.filter { d in
+        profileMatches(d.profileId, target[0]) && (target.count < 2 || d.orgUuid.hasPrefix(target[1]))
+    }
+    guard dests.count == 1 else {
+        print(dests.isEmpty ? "No destination matches “\(args[toAt + 1])”. Options:" : "Pick one with <profile>:<org>:")
+        for d in dests.isEmpty ? options : dests { print("  \(d.profileId):\(d.orgUuid.prefix(8))  \(A.dim(d.label))") }
+        exit(1)
+    }
+    guard let m = MoveStore().add(sessionId: chat.id, title: chat.title, from: chat.location, to: dests[0]) else {
+        print("That chat already has a pending move (see `claude-watch moves`)."); exit(1)
+    }
+    print("Queued \(m.id): “\(chat.title)”  \(chat.location.label) → \(dests[0].label)")
+    if args.contains("--now") {
+        let monitor = Monitor(ownEngine: false)
+        _ = monitor.pollOnce()
+        print("Restarting \(Set([m.from.profileName, m.to.profileName]).sorted().joined(separator: " and "))…")
+        let r = monitor.restartAndRunMoves()
+        for s in r.stuck { print(A.yellow("\(s.name) didn't quit; the move runs once it's closed.")) }
+        for f in r.finished {
+            print(f.status == .done ? A.green("✓ moved “\(f.title)”") : A.red("✗ \(f.title): \(f.note ?? f.status.rawValue)"))
+        }
+    } else {
+        print(A.dim("It runs once both windows are closed (the Claude Watch app does it). Add --now to restart them now."))
+    }
+
+case "moves":
+    let store = MoveStore()
+    if let i = args.firstIndex(of: "--undo"), i + 1 < args.count {
+        guard let m = store.undo(moveId: args[i + 1]) else { print("No finished move \(args[i + 1])."); exit(1) }
+        print("Queued undo \(m.id): “\(m.title)”  \(m.from.label) → \(m.to.label). Runs once both windows are closed.")
+    } else if let i = args.firstIndex(of: "--cancel"), i + 1 < args.count {
+        store.cancel(id: args[i + 1])
+        print("Cancelled \(args[i + 1]).")
+    } else {
+        let all = store.all()
+        if all.isEmpty { print(A.dim("No moves yet.")) }
+        for m in all.suffix(30) {
+            let mark: String
+            switch m.status {
+            case .pending: mark = A.clay("…")
+            case .done: mark = A.green("✓")
+            case .failed: mark = A.red("✗")
+            case .conflict: mark = A.yellow("!")
+            case .undone: mark = A.dim("↺")
+            }
+            print("\(mark) \(A.dim(m.id))  \(A.pad(A.trunc(m.title, 36), 37))\(A.dim(m.from.profileName + " → " + m.to.profileName))"
+                  + (m.note.map { A.dim(" · " + $0) } ?? ""))
+        }
+    }
 
 case nil, "watch":
     let monitor = Monitor(ownEngine: true)
