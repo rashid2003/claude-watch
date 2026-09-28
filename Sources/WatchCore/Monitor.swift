@@ -6,6 +6,7 @@ public enum WatchEvent: Sendable {
     case capSoon(Profile, LimitKind, Date)
     case limited(Profile, LimitKind?, Date?)
     case retry(RetryItem, String)   // item, human-readable message
+    case moved(PendingMove)
 }
 
 /// Weighted-token time series for one account, with O(log n) range sums.
@@ -55,6 +56,8 @@ public final class Monitor {
     private var pendingFree: [String: Date] = [:]
     private var capWarned: [String: Date] = [:]   // "profile/kind" -> window reset it was warned for
     private var firstPoll = true
+    public let moves = MoveStore()
+    private var locations: [ChatLocation] = []
 
     public init(ownEngine: Bool = true) {
         config = Config.load()
@@ -92,6 +95,45 @@ public final class Monitor {
 
     public func profile(id: String) -> Profile? { profiles.first { $0.id == id } }
 
+    /// Queues a move; it runs once both windows are closed. Nil if the chat already has one pending.
+    public func requestMove(sessionId: String, title: String, from: ChatLocation, to: ChatLocation) -> PendingMove? {
+        let m = moves.add(sessionId: sessionId, title: title, from: from, to: to)
+        refreshNow()
+        return m
+    }
+
+    public func undoMove(_ id: String) -> PendingMove? {
+        let m = moves.undo(moveId: id)
+        refreshNow()
+        return m
+    }
+
+    public func cancelMove(_ id: String) { moves.cancel(id: id); refreshNow() }
+
+    /// Quits the windows involved in pending moves, runs the moves, and reopens those windows
+    /// plus each destination. Blocking; call it off the main thread and never from `perform`.
+    public func restartAndRunMoves() -> (stuck: [Profile], finished: [PendingMove]) {
+        let (pending, profs) = queue.sync { (moves.pending, profiles) }
+        let ids = Set(pending.flatMap { [$0.from.profileId, $0.to.profileId] })
+        let (quit, stuck) = WindowControl.quit(profs.filter { ids.contains($0.id) })
+        let finished = queue.sync { runDueMoves(instances: ClaudeProcesses.list(), runners: Runners.list(), now: Date()) }
+        WindowControl.relaunch(profs.filter { p in quit.contains(p) || pending.contains { $0.to.profileId == p.id } })
+        refreshNow()
+        return (stuck, finished)
+    }
+
+    private func runDueMoves(instances: [ClaudeProcesses.Instance], runners: [Runner], now: Date) -> [PendingMove] {
+        guard !moves.pending.isEmpty else { return [] }
+        let running = Set(profiles.filter { ClaudeProcesses.pid(for: $0, in: instances) != nil }.map(\.id))
+        let finished = moves.runDue(profiles: profiles, running: running,
+                                    liveSessions: Set(runners.map(\.sessionId)), now: now)
+        for m in finished {
+            if m.status == .done { attribution.record(m.sessionId, profileId: m.to.profileId) }
+            onEvent?(.moved(m))
+        }
+        return finished
+    }
+
     private static func mtime(_ url: URL) -> Date? {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
@@ -118,6 +160,8 @@ public final class Monitor {
         }
         let instances = ClaudeProcesses.list()
         let runners = Runners.list()
+        if engine.owner { _ = runDueMoves(instances: instances, runners: runners, now: now) }
+        locations = SessionMover.locations(profiles: profiles, config: config)
         let std: (String) -> String = { URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path }
         let profileByDir = Dictionary(profiles.map { (std($0.dataDir.path), $0) }, uniquingKeysWith: { a, _ in a })
         var profileAccount: [String: String] = [:]
@@ -260,7 +304,8 @@ public final class Monitor {
         firstPoll = false
 
         let snap = Snapshot(at: now, accounts: accounts, queue: engine.items,
-                            engineOwner: engine.owner, scanning: false)
+                            engineOwner: engine.owner, scanning: false,
+                            moves: moves.all(), locations: locations, profiles: profiles)
         snapshot = snap
         onSnapshot?(snap)
     }

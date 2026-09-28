@@ -189,6 +189,9 @@ func describe(_ e: WatchEvent) -> (String, String) {
         return ("\(p.name) nearing \(k == .weekly ? "weekly" : "5-hour") limit",
                 "At this pace it hits the cap in ~\(Fmt.duration(at.timeIntervalSinceNow)).")
     case .retry(_, let msg): return ("claude-watch", msg)
+    case .moved(let m):
+        return m.status == .done ? ("Moved “\(m.title)”", "Now in \(m.to.label).")
+                                 : ("Couldn't move “\(m.title)”", m.note ?? m.status.rawValue)
     }
 }
 

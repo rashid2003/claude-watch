@@ -57,6 +57,11 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
         case .retry(let item, let msg):
             c.title = "claude-watch"; c.body = msg
             c.userInfo = ["session": item.sessionId, "profile": item.profileId]
+        case .moved(let m):
+            switch m.status {
+            case .done: c.title = "Moved “\(m.title)”"; c.body = "Now in \(m.to.label)."
+            default: c.title = "Couldn't move “\(m.title)”"; c.body = m.note ?? m.status.rawValue
+            }
         }
         c.sound = .default
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
