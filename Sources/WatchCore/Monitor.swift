@@ -58,6 +58,8 @@ public final class Monitor {
     private var firstPoll = true
     public let moves = MoveStore()
     private var locations: [ChatLocation] = []
+    /// Desktop chats whose CLI process is running: session id -> pid (updated every poll).
+    public private(set) var liveRunners: [String: Int32] = [:]
 
     public init(ownEngine: Bool = true) {
         config = Config.load()
@@ -172,6 +174,9 @@ public final class Monitor {
             live.insert(r.sessionId)
             if let a = r.identity { profileAccount[p.id] = a }
         }
+        liveRunners = Dictionary(runners.map { ($0.sessionId, $0.pid) }, uniquingKeysWith: { a, _ in a })
+        var prompts: [PendingPrompt] = []
+        var procs: [ProcessTree.Proc]?
 
         // Chats are mirrored across profiles; pick the profile that actually runs each one.
         var candidates: [String: [SessionInfo]] = [:]
@@ -250,6 +255,17 @@ public final class Monitor {
                                              now: now)
                 if activity == .idle, live.contains(s.id), let at = tail.lastAt, now.timeIntervalSince(at) < 1800,
                    tail.last != .assistantDone { activity = .working }
+                // A running tool call with no result, a quiet transcript and no process for it: waiting on you.
+                if let pid = liveRunners[s.id], tail.last == .assistantTool, activity != .failed,
+                   let url = s.cliSessionId.flatMap(scanner.transcriptURL), let mtime = Self.mtime(url),
+                   now.timeIntervalSince(mtime) >= 1, let open = PromptDetector.openToolUse(url: url) {
+                    if procs == nil { procs = ProcessTree.all() }
+                    let kids = ProcessTree.childStarts(of: [pid], in: procs!)[pid] ?? []
+                    if PromptDetector.isWaiting(open, transcriptMtime: mtime, childStarts: kids, now: now) {
+                        prompts.append(PromptDetector.prompt(for: s, tool: open))
+                        activity = .waiting
+                    }
+                }
                 let recent = now.timeIntervalSince(s.lastActivityAt) < 24 * 3600
                 guard recent || activity != .idle else { continue }
                 let b = scanner.buckets(for: s.id)
@@ -305,7 +321,7 @@ public final class Monitor {
 
         let snap = Snapshot(at: now, accounts: accounts, queue: engine.items,
                             engineOwner: engine.owner, scanning: false,
-                            moves: moves.all(), locations: locations, profiles: profiles)
+                            moves: moves.all(), locations: locations, profiles: profiles, prompts: prompts)
         snapshot = snap
         onSnapshot?(snap)
     }
