@@ -153,3 +153,109 @@ final class RetryDueTests: XCTestCase {
         XCTAssertFalse(RetryEngine.continuedManually(it, tail: tail))
     }
 }
+
+/// Requests forwarded to the retry engine owner through the retry-request file.
+final class RetryRequestTests: XCTestCase {
+    func testParsesOldSingleValueFiles() {
+        XCTAssertEqual(RetryRequest.parse(""), [])     // mid-write: nothing, not "all"
+        XCTAssertEqual(RetryRequest.parse("*"), [.all])
+        XCTAssertEqual(RetryRequest.parse("work"), [.profile("work")])
+        XCTAssertEqual(RetryRequest.parse("item:local_1"), [.item("local_1")])
+        XCTAssertEqual(RetryRequest.parse("  item:local_1 \n"), [.item("local_1")])
+    }
+
+    func testParsesOneRequestPerLine() {
+        XCTAssertEqual(RetryRequest.parse("item:a\nwork\n\n*\ndismiss:a@1\n"),
+                       [.item("a"), .profile("work"), .all, .dismiss("a@1")])
+    }
+
+    func testLineRoundTrips() {
+        for r in [RetryRequest.all, .profile("p"), .item("local_1@17"), .dismiss("local_1@17")] {
+            XCTAssertEqual(RetryRequest.parse(r.line), [r])
+        }
+    }
+
+    func testAppendedRequestsAreAllTakenOnce() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("retry-request")
+        XCTAssertEqual(RetryRequest.take(from: url), [])
+        RetryRequest.append(.item("a"), to: url)
+        RetryRequest.append(.item("b"), to: url)
+        RetryRequest.append(.profile("work"), to: url)
+        XCTAssertEqual(RetryRequest.take(from: url), [.item("a"), .item("b"), .profile("work")])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), [])
+        XCTAssertEqual(RetryRequest.take(from: url), [])
+        // A file written by an older binary (atomic write, no newline).
+        try "item:c".write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertEqual(RetryRequest.take(from: url), [.item("c")])
+    }
+}
+
+/// Picking, sending and budgeting of queued retries.
+final class RetrySendTests: XCTestCase {
+    let now = Date(timeIntervalSince1970: 1_790_600_000)
+
+    func item(_ sid: String, resetsIn: TimeInterval = -3600, attempts: Int = 0) -> RetryItem {
+        RetryItem(sessionId: sid, cliSessionId: nil, profileId: "p", title: sid, cwd: "/", failedAt: now.addingTimeInterval(-7200),
+                  resetsAt: now.addingTimeInterval(resetsIn), status: .waiting, attempts: attempts,
+                  lastAttemptAt: nil, lastMode: nil, note: nil)
+    }
+
+    func testMissingChatDoesNotBlockTheQueue() {
+        var a = item("gone"); _ = RetryEngine.forceDue(&a)
+        let items = [a, item("later", resetsIn: 3600), item("ok")]
+        let pick = RetryEngine.pickDue(items, isDue: { $0.status == .waiting && ($0.resetsAt ?? now) <= now },
+                                       hasChat: { $0.sessionId != "gone" })
+        XCTAssertEqual(pick.missing, [0])
+        XCTAssertEqual(pick.send, 2)
+    }
+
+    func testNothingDue() {
+        let pick = RetryEngine.pickDue([item("a", resetsIn: 3600)], isDue: { _ in false }, hasChat: { _ in true })
+        XCTAssertEqual(pick.missing, [])
+        XCTAssertNil(pick.send)
+    }
+
+    func testManualSendsDontUseTheAttemptBudget() {
+        let max = 3
+        var it = item("a", resetsIn: 3600)
+        for _ in 0..<5 {
+            _ = RetryEngine.forceDue(&it)
+            RetryEngine.beginSend(&it, mode: .ui, now: now)
+            XCTAssertEqual(it.attempts, 0)
+            XCTAssertFalse(RetryEngine.outOfAttempts(it, max: max))
+            it.status = .waiting
+            it.resetsAt = now.addingTimeInterval(600)   // back to waiting for the reset
+        }
+        // After the reset it still gets all its automatic attempts.
+        for n in 1...max {
+            RetryEngine.beginSend(&it, mode: .ui, now: now)
+            XCTAssertEqual(it.attempts, n)
+            XCTAssertEqual(RetryEngine.outOfAttempts(it, max: max), n == max)
+            it.status = .waiting
+        }
+    }
+
+    func testManualSendAtFullBudgetDoesNotGiveUp() {
+        var it = item("a", attempts: 3)
+        _ = RetryEngine.forceDue(&it)
+        RetryEngine.beginSend(&it, mode: .cli, now: now)
+        XCTAssertEqual(it.attempts, 3)
+        XCTAssertFalse(RetryEngine.outOfAttempts(it, max: 3))
+        XCTAssertEqual(it.status, .verifying)
+        XCTAssertEqual(it.lastMode, .cli)
+        XCTAssertEqual(it.lastAttemptAt, now)
+    }
+
+    func testRetryNowWithModeOffSendsViaUIOnce() {
+        var it = item("a", resetsIn: 3600)
+        XCTAssertNil(RetryEngine.sendMode(for: it, configured: .off))     // automatic: leave it to the user
+        XCTAssertEqual(RetryEngine.sendMode(for: it, configured: .cli), .cli)
+        _ = RetryEngine.forceDue(&it)
+        XCTAssertEqual(RetryEngine.sendMode(for: it, configured: .off), .ui)
+        XCTAssertEqual(RetryEngine.sendMode(for: it, configured: .cli), .cli)
+    }
+}

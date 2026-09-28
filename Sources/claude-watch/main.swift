@@ -187,12 +187,6 @@ func usage() -> Never {
     exit(0)
 }
 
-/// Asks the retry engine (app or dashboard) to retry now: "*" all, a profile id, or "item:<sessionId>".
-func requestRetry(_ profile: String?) {
-    let url = Paths.support.appendingPathComponent("retry-request")
-    try? (profile ?? "*").write(to: url, atomically: true, encoding: .utf8)
-}
-
 func notify(_ title: String, _ body: String) {
     let esc: (String) -> String = { $0.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") }
     let p = Process()
@@ -277,10 +271,10 @@ case "retry":
         let q = Monitor(ownEngine: false).engine.items
         guard let it = q.last(where: { ($0.sessionId == key || $0.id == key) && [.waiting, .failed].contains($0.status) })
         else { print("No waiting or failed chat \(key) in the queue (see `claude-watch queue`)."); exit(1) }
-        requestRetry("item:" + it.sessionId)
+        RetryRequest.append(.item(it.sessionId))
         print("Requested a retry of “\(it.title)”. The retry engine will pick it up on its next poll.")
     } else {
-        requestRetry(args.dropFirst().first)
+        RetryRequest.append(args.dropFirst().first.map { .profile($0) } ?? .all)
         print("Requested. The retry engine will pick it up on its next poll.")
     }
 
@@ -412,7 +406,7 @@ case nil, "watch":
             switch c {
             case UInt8(ascii: "q"): break loop
             case UInt8(ascii: "r"): monitor.refreshNow()
-            case UInt8(ascii: "R"): requestRetry(nil); monitor.refreshNow()
+            case UInt8(ascii: "R"): RetryRequest.append(.all); monitor.refreshNow()
             default: break
             }
         }

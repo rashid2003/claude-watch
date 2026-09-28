@@ -23,6 +23,8 @@ public enum Paths {
     public static var scanCache: URL { support.appendingPathComponent("scan-cache.json") }
     public static var retryLog: URL { support.appendingPathComponent("retry-log.jsonl") }
     public static var engineLock: URL { support.appendingPathComponent("engine.lock") }
+    /// Retry requests for the engine owner, one per line (see `RetryRequest`).
+    public static var retryRequest: URL { support.appendingPathComponent("retry-request") }
     public static var logs: URL {
         let url = support.appendingPathComponent("logs")
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

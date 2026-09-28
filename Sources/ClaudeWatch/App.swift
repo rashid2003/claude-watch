@@ -90,24 +90,21 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
 
     func setMode(_ mode: RetryMode, _ profileId: String) { monitor.setRetryMode(mode, for: profileId) }
 
-    func retryNow(_ profileId: String?) {
-        monitor.perform { m in m.engine.retryNow(profileId: profileId); m.refreshNow() }
-    }
-
     /// Retry every waiting chat of an account (all its member profiles).
-    func retryAll(_ profileIds: [String]) {
+    func retryAll(_ profileIds: [String]) { request(profileIds.map { .profile($0) }) }
+
+    /// Send "continue" to one queued chat now, even if its account is still limited.
+    func retryNow(itemId: String) { request([.item(itemId)]) }
+
+    func dismiss(_ id: String) { request([.dismiss(id)]) }
+
+    /// Runs queue actions here, or forwards them to the process that owns the retry engine.
+    private func request(_ rs: [RetryRequest]) {
         monitor.perform { m in
-            for id in profileIds { m.engine.retryNow(profileId: id) }
+            for r in rs { m.engine.request(r) }
             m.refreshNow()
         }
     }
-
-    /// Send "continue" to one queued chat now, even if its account is still limited.
-    func retryNow(itemId: String) {
-        monitor.perform { m in m.engine.retryNow(itemId: itemId); m.refreshNow() }
-    }
-
-    func dismiss(_ id: String) { monitor.perform { m in m.engine.dismiss(itemId: id); m.refreshNow() } }
 
     // MARK: Moving chats
 

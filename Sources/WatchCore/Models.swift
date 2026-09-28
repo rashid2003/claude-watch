@@ -151,6 +151,8 @@ public struct RetryItem: Codable, Hashable, Sendable, Identifiable {
     public var lastAttemptAt: Date?
     public var lastMode: RetryMode?
     public var note: String?
+    /// The last send was a user-requested "Retry now": its outcome doesn't count toward maxAttempts.
+    public var lastSendManual: Bool? = nil
 }
 
 public struct RetryLogEntry: Codable, Sendable {
