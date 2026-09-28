@@ -13,9 +13,11 @@ let package = Package(
     targets: [
         .target(name: "WatchProtocol"),
         .target(name: "WatchCore", dependencies: ["WatchProtocol"]),
+        .target(name: "WatchBridge", dependencies: ["WatchProtocol"]),
         .executableTarget(name: "claude-watch", dependencies: ["WatchCore"]),
-        .executableTarget(name: "ClaudeWatch", dependencies: ["WatchCore"]),
+        .executableTarget(name: "ClaudeWatch", dependencies: ["WatchCore", "WatchBridge"]),
         .testTarget(name: "WatchProtocolTests", dependencies: ["WatchProtocol"]),
+        .testTarget(name: "WatchBridgeTests", dependencies: ["WatchBridge"]),
         .testTarget(name: "WatchCoreTests", dependencies: ["WatchCore"],
                     resources: [.copy("Fixtures")]),
     ]
