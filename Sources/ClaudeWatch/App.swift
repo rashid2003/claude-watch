@@ -8,6 +8,7 @@ import WatchCore
 final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     @Published var snapshot: Snapshot?
     @Published var trusted = UIRetry.isTrusted
+    @Published var chatsProfile: String?     // account picked when opening the All chats window
     let monitor = Monitor(ownEngine: true)
 
     override init() {
@@ -94,6 +95,80 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
     }
 
     func dismiss(_ id: String) { monitor.perform { m in m.engine.dismiss(itemId: id); m.refreshNow() } }
+
+    // MARK: Moving chats
+
+    func profile(_ id: String) -> Profile? { snapshot?.profiles.first { $0.id == id } }
+
+    func source(of s: SessionInfo) -> ChatLocation? {
+        let parts = s.folder.split(separator: "/").map(String.init)
+        guard parts.count == 2 else { return nil }
+        let id = s.profileId + "/" + parts[0] + "/" + parts[1]
+        return snapshot?.locations.first { $0.id == id }
+            ?? ChatLocation(profileId: s.profileId, accountUuid: parts[0], orgUuid: parts[1])
+    }
+
+    func destinations(from loc: ChatLocation) -> [ChatLocation] {
+        SessionMover.destinations(for: loc, in: snapshot?.locations ?? [])
+    }
+
+    func pendingMove(for sessionId: String) -> PendingMove? {
+        snapshot?.moves.first { $0.sessionId == sessionId && $0.status == .pending }
+    }
+
+    /// Why a chat can't move right now, or nil.
+    func moveBlocker(_ sessionId: String) -> String? {
+        switch snapshot?.accounts.flatMap(\.sessions).first(where: { $0.id == sessionId })?.activity {
+        case .working?: return "Can't move while it's working"
+        case .waiting?: return "Can't move while it needs you"
+        default: return pendingMove(for: sessionId) != nil ? "Already moving" : nil
+        }
+    }
+
+    func move(_ chats: [(id: String, title: String, from: ChatLocation)], to: ChatLocation) {
+        let queued = chats.compactMap { monitor.requestMove(sessionId: $0.id, title: $0.title, from: $0.from, to: to) }
+        if !queued.isEmpty { askRestart(queued) }
+    }
+
+    func undoMove(_ id: String) {
+        if let m = monitor.undoMove(id) { askRestart([m]) }
+    }
+
+    func cancelMove(_ id: String) { monitor.cancelMove(id) }
+
+    func askRestart(_ queued: [PendingMove]) {
+        let names = Array(Set(queued.flatMap { [$0.from.profileName, $0.to.profileName] })).sorted()
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = queued.count == 1 ? "Move “\(queued[0].title)” to \(queued[0].to.label)?"
+                                          : "Move \(queued.count) chats to \(queued[0].to.label)?"
+        a.informativeText = "\(names.joined(separator: " and ")) need to restart. Claude Watch quits them, "
+            + "moves the chat and opens them again. With Later, the move runs the next time both are closed."
+        a.addButton(withTitle: "Restart now")
+        a.addButton(withTitle: "Later")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        let windows = Set(queued.flatMap { [$0.from.profileId, $0.to.profileId] })
+        let busy = (snapshot?.accounts.flatMap(\.sessions) ?? [])
+            .filter { windows.contains($0.info.profileId) && $0.activity == .working }
+        if !busy.isEmpty {
+            let w = NSAlert()
+            w.messageText = busy.count == 1 ? "1 chat is still working" : "\(busy.count) chats are still working"
+            w.informativeText = busy.prefix(5).map { "• " + $0.info.title }.joined(separator: "\n")
+                + "\n\nQuitting stops them mid-reply."
+            w.addButton(withTitle: "Quit anyway")
+            w.addButton(withTitle: "Later")
+            guard w.runModal() == .alertFirstButtonReturn else { return }
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [monitor] in
+            let r = monitor.restartAndRunMoves()
+            for p in r.stuck {
+                let c = UNMutableNotificationContent()
+                c.title = "\(p.name) didn't quit"
+                c.body = "The move runs once you close it."
+                UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
+            }
+        }
+    }
 }
 
 // MARK: - Style
@@ -158,6 +233,7 @@ struct LimitRow: View {
 struct SessionRow: View {
     let s: SessionStatus
     let open: () -> Void
+    @EnvironmentObject var model: WatchModel
     @State private var hover = false
 
     var body: some View {
@@ -168,8 +244,15 @@ struct SessionRow: View {
                 Text("· " + (s.info.cwd as NSString).lastPathComponent)
                     .foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 4)
-                if !s.tasks.isEmpty { Text(taskSummary).foregroundStyle(.secondary) }
-                Text(activity.0).foregroundStyle(activity.1)
+                if let p = model.pendingMove(for: s.id) {
+                    Text("→ " + p.to.profileName + " · waiting for restart").foregroundStyle(Theme.clay).lineLimit(1)
+                    Button { model.cancelMove(p.id) } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.plain).foregroundStyle(.tertiary).help("Cancel move")
+                } else {
+                    if !s.tasks.isEmpty { Text(taskSummary).foregroundStyle(.secondary) }
+                    Text(activity.0).foregroundStyle(activity.1)
+                    moveMenu.opacity(hover ? 1 : 0)
+                }
             }
             if let t = s.tasks.first(where: { $0.status == .in_progress }) {
                 Text("◐ " + (t.activeForm ?? t.subject)).foregroundStyle(.secondary).lineLimit(1).padding(.leading, 14)
@@ -182,6 +265,20 @@ struct SessionRow: View {
         .onHover { hover = $0 }
         .onTapGesture(perform: open)
         .help(s.tail.lastRateLimit?.text ?? "Open in Claude")
+    }
+
+    @ViewBuilder var moveMenu: some View {
+        let from = model.source(of: s.info)
+        let targets = from.map { model.destinations(from: $0) } ?? []
+        let blocker = model.moveBlocker(s.id) ?? (targets.isEmpty ? "No other window to move to" : nil)
+        Menu {
+            ForEach(targets) { t in
+                Button(t.label) { if let from { model.move([(id: s.id, title: s.info.title, from: from)], to: t) } }
+            }
+        } label: { Image(systemName: "arrow.left.arrow.right") }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .disabled(blocker != nil)
+        .help(blocker ?? "Move to another window")
     }
 
     var taskSummary: String {
@@ -204,6 +301,7 @@ struct AccountCard: View {
     let a: AccountStatus
     let now: Date
     @EnvironmentObject var model: WatchModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -227,6 +325,12 @@ struct AccountCard: View {
                      + (a.tokensPerHourNow > 0 ? " · \(Fmt.tokens(a.tokensPerHourNow))/h" : ""))
                     .foregroundStyle(.secondary)
                 Spacer()
+                Button("All chats…") {
+                    model.chatsProfile = a.profile.id
+                    openWindow(id: "chats")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                .buttonStyle(.link)
                 Picker("", selection: Binding(get: { a.retryMode }, set: { model.setMode($0, a.profile.id) })) {
                     ForEach(RetryMode.allCases, id: \.self) { Text($0.rawValue.uppercased()).tag($0) }
                 }
@@ -400,5 +504,10 @@ struct ClaudeWatchApp: App {
             Text(model.label).monospacedDigit()
         }
         .menuBarExtraStyle(.window)
+
+        Window("All chats", id: "chats") {
+            ChatsWindow().environmentObject(model)
+        }
+        .defaultSize(width: 820, height: 560)
     }
 }
