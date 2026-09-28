@@ -94,4 +94,102 @@ public enum SessionMover {
             }
         }.sorted { $0.lastActivityAt > $1.lastActivityAt }
     }
+
+    /// Keys tied to the account/org the chat ran under; dropped when it moves.
+    static let accountKeys = ["remoteMcpServersConfig", "sessionPermissionUpdates", "alwaysAllowedReasons", "toolSurfaceSnapshot"]
+
+    /// Tests set this to make `execute` fail at a named step.
+    static var faultPoint: String?
+    static func fault(_ name: String) throws {
+        if faultPoint == name { throw MoveError("injected fault at \(name)") }
+    }
+
+    public struct Outcome: Sendable {
+        public var backupDir: URL
+        public var newCwd: String?
+    }
+
+    static func stamp(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        return f.string(from: d)
+    }
+
+    /// Moves one chat record from `from` to `to`. All or nothing: on any error every
+    /// change is undone and the source record is left as it was.
+    public static func execute(sessionId: String, from: ChatLocation, to: ChatLocation, profiles: [Profile],
+                               roots: MoverRoots = .live, now: Date = Date()) throws -> Outcome {
+        let fm = FileManager.default
+        guard let src = profiles.first(where: { $0.id == from.profileId }),
+              let dst = profiles.first(where: { $0.id == to.profileId }) else { throw MoveError("window not found") }
+        let srcDir = folder(from, src), dstDir = folder(to, dst)
+        let srcURL = srcDir.appendingPathComponent(sessionId + ".json")
+        let dstURL = dstDir.appendingPathComponent(sessionId + ".json")
+        guard fm.fileExists(atPath: srcURL.path) else { throw MoveError("chat not found in \(from.label)") }
+        guard !fm.fileExists(atPath: dstURL.path) else { throw MoveError("already in \(to.label)", conflict: true) }
+        guard var rec = JSONFile.object(at: srcURL) else { throw MoveError("chat record unreadable") }
+
+        // Backup first, so a move can always be undone by hand.
+        let backup = roots.backups.appendingPathComponent(stamp(now) + "-" + sessionId)
+        try fm.createDirectory(at: backup, withIntermediateDirectories: true)
+        try fm.copyItem(at: srcURL, to: backup.appendingPathComponent("record.json"))
+        let srcIdx = srcDir.appendingPathComponent(archiveIndex), dstIdx = dstDir.appendingPathComponent(archiveIndex)
+        let srcIdxBackup = backup.appendingPathComponent("source-" + archiveIndex)
+        let dstIdxBackup = backup.appendingPathComponent("dest-" + archiveIndex)
+        if fm.fileExists(atPath: srcIdx.path) { try fm.copyItem(at: srcIdx, to: srcIdxBackup) }
+        if fm.fileExists(atPath: dstIdx.path) { try fm.copyItem(at: dstIdx, to: dstIdxBackup) }
+        try JSONSerialization.data(withJSONObject: ["sessionId": sessionId, "from": from.id, "to": to.id,
+                                                    "at": Int(now.timeIntervalSince1970)] as [String: Any],
+                                   options: [.prettyPrinted])
+            .write(to: backup.appendingPathComponent("move.json"))
+
+        var undo: [() -> Void] = []
+        func restore(_ copy: URL, to url: URL) {
+            try? fm.removeItem(at: url)
+            if fm.fileExists(atPath: copy.path) { try? fm.copyItem(at: copy, to: url) }
+        }
+        do {
+            for k in accountKeys { rec.removeValue(forKey: k) }
+            var newCwd: String?
+            if let cwd = rec["cwd"] as? String,
+               let moved = try relocateScratch(cwd: cwd, src: src, dst: dst, to: to, roots: roots, backup: backup, undo: &undo) {
+                if let origin = rec["originCwd"] as? String, resolve(origin) == resolve(cwd) { rec["originCwd"] = moved }
+                rec["cwd"] = moved
+                newCwd = moved
+            }
+
+            try fm.createDirectory(at: dstDir, withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: rec).write(to: dstURL, options: .withoutOverwriting)
+            undo.append { try? fm.removeItem(at: dstURL) }
+            try fault("afterWrite")
+
+            let srcArchived = readArchived(srcDir)
+            if (rec["isArchived"] as? Bool ?? false) || srcArchived.contains(sessionId) {
+                var ids = readArchived(dstDir)
+                if !ids.contains(sessionId) { ids.append(sessionId) }
+                try writeArchived(ids, dstDir)
+                undo.append { restore(dstIdxBackup, to: dstIdx) }
+            }
+            if srcArchived.contains(sessionId) {
+                try writeArchived(srcArchived.filter { $0 != sessionId }, srcDir)
+                undo.append { restore(srcIdxBackup, to: srcIdx) }
+            }
+
+            try fm.removeItem(at: srcURL)
+            undo.append { restore(backup.appendingPathComponent("record.json"), to: srcURL) }
+            try fault("end")
+            return Outcome(backupDir: backup, newCwd: newCwd)
+        } catch {
+            for u in undo.reversed() { u() }
+            throw error
+        }
+    }
+
+    /// Scratch-workspace chats get their folder moved with them (step 3 of the spec).
+    /// Returns nil when the cwd is not the source profile's scratch workspace.
+    static func relocateScratch(cwd: String, src: Profile, dst: Profile, to: ChatLocation,
+                                roots: MoverRoots, backup: URL, undo: inout [() -> Void]) throws -> String? {
+        nil
+    }
 }

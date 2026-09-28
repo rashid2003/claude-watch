@@ -105,3 +105,58 @@ final class MoverListingTests: MoveTreeCase {
         XCTAssertEqual(chats.first { $0.id == "local_1" }?.title, "Chat local_1")
     }
 }
+
+final class MoverExecuteTests: MoveTreeCase {
+    func testPlainMoveStripsAccountKeysAndKeepsProjectCwd() throws {
+        let src = try writeRecord("local_1", cwd: "/Users/x/Development/proj")
+        let r = try SessionMover.execute(sessionId: "local_1", from: from, to: to, profiles: [p1, p2], roots: roots)
+        let dst = folder(p2, a2, o2).appendingPathComponent("local_1.json")
+        XCTAssertFalse(fm.fileExists(atPath: src.path))
+        let d = json(dst)
+        XCTAssertEqual(d["cwd"] as? String, "/Users/x/Development/proj")
+        XCTAssertEqual(d["model"] as? String, "claude-opus-5-5")
+        for k in ["remoteMcpServersConfig", "sessionPermissionUpdates", "alwaysAllowedReasons", "toolSurfaceSnapshot"] {
+            XCTAssertNil(d[k], k)
+        }
+        XCTAssertNil(r.newCwd)
+        XCTAssertTrue(fm.fileExists(atPath: r.backupDir.appendingPathComponent("record.json").path))
+        XCTAssertTrue(fm.fileExists(atPath: r.backupDir.appendingPathComponent("move.json").path))
+    }
+
+    func testConflictLeavesSourceAlone() throws {
+        let src = try writeRecord("local_1", cwd: "/tmp")
+        try Data("{}".utf8).write(to: folder(p2, a2, o2).appendingPathComponent("local_1.json"))
+        XCTAssertThrowsError(try SessionMover.execute(sessionId: "local_1", from: from, to: to, profiles: [p1, p2], roots: roots)) {
+            XCTAssertTrue(($0 as? MoveError)?.conflict == true)
+        }
+        XCTAssertTrue(fm.fileExists(atPath: src.path))
+        XCTAssertEqual(json(folder(p2, a2, o2).appendingPathComponent("local_1.json")).count, 0)
+    }
+
+    func testArchivedChatMovesBetweenIndexes() throws {
+        try writeRecord("local_1", cwd: "/tmp", archived: true)
+        try writeRecord("local_2", cwd: "/tmp", archived: true)
+        try writeIdx(["local_1", "local_2"], folder(p1, a1, o1))
+        _ = try SessionMover.execute(sessionId: "local_1", from: from, to: to, profiles: [p1, p2], roots: roots)
+        XCTAssertEqual(SessionMover.readArchived(folder(p1, a1, o1)), ["local_2"])
+        XCTAssertEqual(SessionMover.readArchived(folder(p2, a2, o2)), ["local_1"])
+    }
+
+    func testFailureAfterRemoveRollsEverythingBack() throws {
+        let src = try writeRecord("local_1", cwd: "/tmp", archived: true)
+        try writeIdx(["local_1"], folder(p1, a1, o1))
+        let before = try Data(contentsOf: src)
+        SessionMover.faultPoint = "end"
+        XCTAssertThrowsError(try SessionMover.execute(sessionId: "local_1", from: from, to: to, profiles: [p1, p2], roots: roots))
+        XCTAssertEqual(try Data(contentsOf: src), before)
+        XCTAssertFalse(fm.fileExists(atPath: folder(p2, a2, o2).appendingPathComponent("local_1.json").path))
+        XCTAssertEqual(SessionMover.readArchived(folder(p1, a1, o1)), ["local_1"])
+        XCTAssertFalse(fm.fileExists(atPath: folder(p2, a2, o2).appendingPathComponent("archived-sessions.idx").path))
+    }
+
+    func testMissingRecordFails() {
+        XCTAssertThrowsError(try SessionMover.execute(sessionId: "local_9", from: from, to: to, profiles: [p1, p2], roots: roots)) {
+            XCTAssertEqual(($0 as? MoveError)?.conflict, false)
+        }
+    }
+}
