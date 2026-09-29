@@ -269,7 +269,7 @@
 				CODE_SIGN_ENTITLEMENTS = ClaudeRemote/ClaudeRemote.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 6W5NJUTUCV;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClaudeRemote/Info.plist;
@@ -297,7 +297,7 @@
 				CODE_SIGN_ENTITLEMENTS = ClaudeRemote/ClaudeRemote.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 6W5NJUTUCV;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ClaudeRemote/Info.plist;
