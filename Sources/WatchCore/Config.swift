@@ -23,6 +23,10 @@ public enum Paths {
     public static var scanCache: URL { support.appendingPathComponent("scan-cache.json") }
     public static var retryLog: URL { support.appendingPathComponent("retry-log.jsonl") }
     public static var engineLock: URL { support.appendingPathComponent("engine.lock") }
+    public static var devices: URL { support.appendingPathComponent("devices.json") }
+    public static var remoteLog: URL { support.appendingPathComponent("remote-log.jsonl") }
+    /// Unix socket for headless approval requests (paths are limited to 104 bytes).
+    public static var bridgeSocket: String { support.appendingPathComponent("bridge.sock").path }
     public static var logs: URL {
         let url = support.appendingPathComponent("logs")
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -55,6 +59,12 @@ public struct Config: Codable, Sendable {
     public var cliExtraArgs: [String] = []
     /// Display names for org UUIDs, used in "move to" menus. Unknown orgs show their first 8 characters.
     public var orgNames: [String: String] = [:]
+    /// iPhone remote (ClaudeRemote): listens on the Tailscale addresses and 127.0.0.1.
+    public var bridgeEnabled: Bool = true
+    public var bridgePort: Int = 7433
+    /// Prevent idle sleep while a phone is paired, so it can reach the Mac.
+    public var keepAwakeWhenPaired: Bool = false
+    public var keepAwakeOnlyOnAC: Bool = true
 
     public init() {}
 
@@ -72,6 +82,10 @@ public struct Config: Codable, Sendable {
         profiles = try c.decodeIfPresent([String: ProfileConfig].self, forKey: .profiles) ?? [:]
         cliExtraArgs = try c.decodeIfPresent([String].self, forKey: .cliExtraArgs) ?? []
         orgNames = try c.decodeIfPresent([String: String].self, forKey: .orgNames) ?? [:]
+        bridgeEnabled = try c.decodeIfPresent(Bool.self, forKey: .bridgeEnabled) ?? d.bridgeEnabled
+        bridgePort = try c.decodeIfPresent(Int.self, forKey: .bridgePort) ?? d.bridgePort
+        keepAwakeWhenPaired = try c.decodeIfPresent(Bool.self, forKey: .keepAwakeWhenPaired) ?? d.keepAwakeWhenPaired
+        keepAwakeOnlyOnAC = try c.decodeIfPresent(Bool.self, forKey: .keepAwakeOnlyOnAC) ?? d.keepAwakeOnlyOnAC
     }
 
     public func retryMode(for profileId: String) -> RetryMode {

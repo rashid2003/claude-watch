@@ -79,6 +79,12 @@ public final class Monitor {
 
     public func perform(_ block: @escaping (Monitor) -> Void) { queue.async { [weak self] in if let self { block(self) } } }
 
+    /// Runs `block` on the monitor queue and waits. Never call it from `perform` or the monitor queue.
+    public func sync<T>(_ block: (Monitor) -> T) -> T { queue.sync { block(self) } }
+
+    /// The transcript of a chat (monitor queue only: use from `perform` / `sync`).
+    public func transcriptURL(cliSessionId: String) -> URL? { scanner.transcriptURL(cliSessionId: cliSessionId) }
+
     public func stop() { timer?.cancel(); scanner.save(); engine.saveState() }
 
     /// Runs one poll synchronously (for `claude-watch status`).

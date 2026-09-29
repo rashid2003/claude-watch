@@ -15,6 +15,8 @@ pkill -x ClaudeWatch 2>/dev/null || true
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/ClaudeWatch" "$APP/Contents/MacOS/ClaudeWatch"
+# The CLI also serves the iPhone prompt tool; keep a copy next to the app binary.
+cp "$BIN/claude-watch" "$APP/Contents/MacOS/claude-watch"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

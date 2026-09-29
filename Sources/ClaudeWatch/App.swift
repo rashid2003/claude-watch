@@ -9,20 +9,29 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
     @Published var snapshot: Snapshot?
     @Published var trusted = UIRetry.isTrusted
     @Published var chatsProfile: String?     // account picked when opening the All chats window
+    @Published var bridgeTick = 0             // bumps when paired devices / pairing change
     let monitor = Monitor(ownEngine: true)
+    private(set) var bridge: BridgeController?
 
     override init() {
         super.init()
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        if monitor.config.bridgeEnabled {
+            let b = BridgeController(monitor: monitor)
+            b.onChange = { [weak self] in self?.bridgeTick += 1 }
+            b.start()
+            bridge = b
+        }
         monitor.onSnapshot = { [weak self] s in
+            self?.bridge?.update(s)
             DispatchQueue.main.async {
                 self?.snapshot = s
                 self?.trusted = UIRetry.isTrusted
             }
         }
-        monitor.onEvent = { [weak self] e in self?.notify(e) }
+        monitor.onEvent = { [weak self] e in self?.notify(e); self?.bridge?.event(e) }
         monitor.start()
         // Ask for Accessibility + Automation now, while someone is at the keyboard.
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {
@@ -416,6 +425,7 @@ struct QueueSection: View {
 
 struct PopoverView: View {
     @EnvironmentObject var model: WatchModel
+    @Environment(\.openWindow) private var openWindow
     @State private var showStats = false
 
     var body: some View {
@@ -465,8 +475,10 @@ struct PopoverView: View {
                     Button(showStats ? "Hide stats" : "UI vs CLI stats") { showStats.toggle() }
                     Button("Config") { NSWorkspace.shared.open(Paths.config) }
                     Button("Logs") { NSWorkspace.shared.open(Paths.support) }
+                    Button("iPhone…") { NSApp.activate(); openWindow(id: "pair") }
+                        .help("Pair the ClaudeRemote iPhone app")
                     Spacer()
-                    Button("Quit") { model.monitor.stop(); NSApp.terminate(nil) }
+                    Button("Quit") { model.bridge?.stop(); model.monitor.stop(); NSApp.terminate(nil) }
                 }
                 .buttonStyle(.link).font(Theme.monoSmall).padding(.top, 6)
             }
@@ -509,5 +521,10 @@ struct ClaudeWatchApp: App {
             ChatsWindow().environmentObject(model)
         }
         .defaultSize(width: 820, height: 560)
+
+        Window("Pair iPhone", id: "pair") {
+            PairingWindow().environmentObject(model)
+        }
+        .windowResizability(.contentSize)
     }
 }
