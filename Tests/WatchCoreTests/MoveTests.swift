@@ -209,6 +209,7 @@ final class MoverExecuteTests: MoveTreeCase {
         let url = root.appendingPathComponent("x.json")
         try SessionMover.writeExclusive(Data("one".utf8), to: url)
         XCTAssertEqual(try String(contentsOf: url), "one")
+        XCTAssertEqual((try fm.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
         XCTAssertThrowsError(try SessionMover.writeExclusive(Data("two".utf8), to: url)) {
             XCTAssertTrue(($0 as? MoveError)?.conflict == true)
         }

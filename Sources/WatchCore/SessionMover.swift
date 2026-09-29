@@ -232,6 +232,7 @@ public enum SessionMover {
             .appendingPathComponent(".\(url.lastPathComponent).tmp-\(UUID().uuidString)")
         defer { unlink(tmp.path) }   // also after a partial write
         try data.write(to: tmp)
+        chmod(tmp.path, 0o600)       // Claude keeps chat records private to the user
         if link(tmp.path, url.path) != 0 {
             let code = errno
             if code == EEXIST { throw MoveError("already exists: \(url.lastPathComponent)", conflict: true) }
