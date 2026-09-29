@@ -182,7 +182,7 @@ func usage() -> Never {
       claude-watch profiles            list discovered profiles
       claude-watch move <chat> --to <profile>[:<org>] [--from <profile>] [--now]
                                        move a chat (id or title words) to another window
-      claude-watch moves [--undo <id> | --cancel <id>]
+      claude-watch moves [--undo <id> [--now] | --cancel <id> | --now]
     """)
     exit(0)
 }
@@ -193,6 +193,19 @@ func notify(_ title: String, _ body: String) {
     p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
     p.arguments = ["-e", "display notification \"\(esc(body))\" with title \"\(esc(title))\""]
     try? p.run()
+}
+
+/// Quits the windows of these moves, runs them, reopens the windows, and prints the outcome.
+func restartAndRun(_ moves: [PendingMove]) {
+    let monitor = Monitor(ownEngine: false)
+    _ = monitor.pollOnce()
+    print("Restarting \(Set(moves.flatMap { [$0.from.profileName, $0.to.profileName] }).sorted().joined(separator: " and "))…")
+    let r = monitor.restartAndRunMoves(only: Set(moves.map(\.id)))
+    for s in r.stuck { print(A.yellow("\(s.name) didn't quit; the move runs once it's closed.")) }
+    for w in r.waiting { print(A.yellow(w.waitingMessage)) }
+    for f in r.finished {
+        print(f.status == .done ? A.green("✓ moved “\(f.title)”") : A.red("✗ \(f.title): \(f.note ?? f.status.rawValue)"))
+    }
 }
 
 func describe(_ e: WatchEvent) -> (String, String) {
@@ -334,15 +347,7 @@ case "move":
     }
     print("Queued \(m.id): “\(chat.title)”  \(chat.location.label) → \(dests[0].label)")
     if args.contains("--now") {
-        let monitor = Monitor(ownEngine: false)
-        _ = monitor.pollOnce()
-        print("Restarting \(Set([m.from.profileName, m.to.profileName]).sorted().joined(separator: " and "))…")
-        let r = monitor.restartAndRunMoves(only: [m.id])
-        for s in r.stuck { print(A.yellow("\(s.name) didn't quit; the move runs once it's closed.")) }
-        for w in r.waiting { print(A.yellow(w.waitingMessage)) }
-        for f in r.finished {
-            print(f.status == .done ? A.green("✓ moved “\(f.title)”") : A.red("✗ \(f.title): \(f.note ?? f.status.rawValue)"))
-        }
+        restartAndRun([m])
     } else {
         print(A.dim("It runs once both windows are closed (the Claude Watch app does it). Add --now to restart them now."))
     }
@@ -351,10 +356,14 @@ case "moves":
     let store = MoveStore()
     if let i = args.firstIndex(of: "--undo"), i + 1 < args.count {
         guard let m = store.undo(moveId: args[i + 1]) else { print("No finished move \(args[i + 1]), or it couldn't be queued."); exit(1) }
-        print("Queued undo \(m.id): “\(m.title)”  \(m.from.label) → \(m.to.label). Runs once both windows are closed.")
+        print("Queued undo \(m.id): “\(m.title)”  \(m.from.label) → \(m.to.label).")
+        if args.contains("--now") { restartAndRun([m]) } else { print(A.dim("Runs once both windows are closed. Add --now to restart them now.")) }
     } else if let i = args.firstIndex(of: "--cancel"), i + 1 < args.count {
         store.cancel(id: args[i + 1])
         print("Cancelled \(args[i + 1]).")
+    } else if args.contains("--now") {
+        let pending = store.pending
+        if pending.isEmpty { print(A.dim("No pending moves.")) } else { restartAndRun(pending) }
     } else {
         let all = store.all()
         if all.isEmpty { print(A.dim("No moves yet.")) }

@@ -39,7 +39,7 @@ claude-watch probe [profile]  # dry-run of the UI path: opens a chat, types noth
 claude-watch set-token <profile>
 claude-watch profiles
 claude-watch move "title words" --to 2 [--now]   # move a chat to window claude-2-… (see below)
-claude-watch moves [--undo <id> | --cancel <id>]
+claude-watch moves [--undo <id> [--now] | --cancel <id> | --now]
 ```
 
 ## Moving chats
