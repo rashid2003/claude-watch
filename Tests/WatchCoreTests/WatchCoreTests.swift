@@ -105,6 +105,22 @@ final class RetryDueTests: XCTestCase {
                   lastAttemptAt: nil, lastMode: nil, note: nil)
     }
 
+    func testMovedItemDropsOldAccountReset() {
+        // Free new account: due once the retry delay has passed since the failure.
+        let moved = RetryEngine.rehomed(item(resetsIn: 3 * 3600), to: "q", limitedUntil: nil)
+        XCTAssertEqual(moved.profileId, "q")
+        XCTAssertEqual(moved.resetsAt, moved.failedAt)
+        XCTAssertTrue(RetryEngine.isDue(moved, limitedUntil: nil, retryDelay: 60, now: now))
+        // Limited new account: waits for that account's reset instead.
+        let until = now.addingTimeInterval(1800)
+        XCTAssertEqual(RetryEngine.rehomed(item(resetsIn: 3 * 3600), to: "q", limitedUntil: until).resetsAt, until)
+        // "Retry now" stays forced; finished items keep their history.
+        var forced = item(); _ = RetryEngine.forceDue(&forced)
+        XCTAssertEqual(RetryEngine.rehomed(forced, to: "q", limitedUntil: until).resetsAt, RetryEngine.forcedAt)
+        let done = item(.done)
+        XCTAssertEqual(RetryEngine.rehomed(done, to: "q", limitedUntil: nil).resetsAt, done.resetsAt)
+    }
+
     func testWaitsForResetAndDelay() {
         XCTAssertFalse(RetryEngine.isDue(item(resetsIn: 3600), limitedUntil: nil, retryDelay: 60, now: now))
         XCTAssertFalse(RetryEngine.isDue(item(resetsIn: -30), limitedUntil: nil, retryDelay: 60, now: now))
@@ -257,5 +273,48 @@ final class RetrySendTests: XCTestCase {
         _ = RetryEngine.forceDue(&it)
         XCTAssertEqual(RetryEngine.sendMode(for: it, configured: .off), .ui)
         XCTAssertEqual(RetryEngine.sendMode(for: it, configured: .cli), .cli)
+    }
+}
+
+/// Limit hits of a chat moved between accounts count for the account they happened on.
+final class MovedHitTests: XCTestCase {
+    let t0 = Date(timeIntervalSince1970: 1_790_600_000)
+
+    func loc(_ p: String, _ acct: String) -> ChatLocation { ChatLocation(profileId: p, accountUuid: acct, orgUuid: "o") }
+
+    func move(_ id: String, _ from: ChatLocation, _ to: ChatLocation, at: TimeInterval,
+              status: PendingMove.Status = .done, undoOf: String? = nil) -> PendingMove {
+        PendingMove(id: id, sessionId: "local_1", title: "t", from: from, to: to, createdAt: t0,
+                    status: status, finishedAt: status == .pending ? nil : t0.addingTimeInterval(at),
+                    note: nil, backupDir: nil, undoOf: undoOf)
+    }
+
+    func hit(at: TimeInterval) -> RateLimitHit {
+        RateLimitHit(at: t0.addingTimeInterval(at), resetsAt: t0.addingTimeInterval(at + 3600), kind: .fiveHour, text: "limit")
+    }
+
+    func testHitBeforeMoveDoesNotCountForNewAccount() {
+        let a = loc("p1", "A"), b = loc("p2", "B")
+        let arr = Monitor.arrivals([move("m1", a, b, at: 100)])
+        XCTAssertNil(Monitor.accountHit(hit(at: 50), sessionId: "local_1", members: ["p2"], arrivals: arr))
+        XCTAssertNotNil(Monitor.accountHit(hit(at: 150), sessionId: "local_1", members: ["p2"], arrivals: arr))
+        XCTAssertNotNil(Monitor.accountHit(hit(at: 50), sessionId: "local_2", members: ["p2"], arrivals: arr))
+    }
+
+    func testOnlyFinishedCrossAccountMovesCount() {
+        let a = loc("p1", "A"), a2 = loc("p3", "A"), b = loc("p2", "B")
+        XCTAssertTrue(Monitor.arrivals([move("m1", a, a2, at: 100)]).isEmpty)
+        XCTAssertTrue(Monitor.arrivals([move("m1", a, b, at: 100, status: .pending)]).isEmpty)
+        XCTAssertTrue(Monitor.arrivals([move("m1", a, b, at: 100, status: .failed)]).isEmpty)
+        // Latest arrival wins: A -> B at 100, B -> A at 200.
+        let arr = Monitor.arrivals([move("m2", b, a, at: 200), move("m1", a, b, at: 100)])
+        XCTAssertEqual(arr["local_1"]?.profileId, "p1")
+        XCTAssertNil(Monitor.accountHit(hit(at: 150), sessionId: "local_1", members: ["p1"], arrivals: arr))
+    }
+
+    func testUndoneMoveKeepsHitsOnOriginalAccount() {
+        let a = loc("p1", "A"), b = loc("p2", "B")
+        let arr = Monitor.arrivals([move("m1", a, b, at: 100, status: .undone), move("m2", b, a, at: 200, undoOf: "m1")])
+        XCTAssertNotNil(Monitor.accountHit(hit(at: 50), sessionId: "local_1", members: ["p1"], arrivals: arr))
     }
 }

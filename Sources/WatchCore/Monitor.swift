@@ -227,6 +227,8 @@ public final class Monitor {
             else { groups.append((key, [p])) }
         }
 
+        let moveList = moves.all()
+        let arrivals = Self.arrivals(moveList)
         var accounts: [AccountStatus] = []
         var allStatuses: [SessionStatus] = []
         for g in groups {
@@ -239,7 +241,9 @@ public final class Monitor {
             // A limit error only counts while nothing on the account has succeeded since.
             let tails = accountSessions.map { scanner.tail(for: $0) }
             let lastSuccess = tails.compactMap(\.lastSuccessAt).max() ?? .distantPast
-            let allHits = tails.compactMap(\.lastRateLimit).filter { now.timeIntervalSince($0.at) < 8 * 86400 }
+            let allHits = zip(accountSessions, tails)
+                .compactMap { s, t in Self.accountHit(t.lastRateLimit, sessionId: s.id, members: memberIds, arrivals: arrivals) }
+                .filter { now.timeIntervalSince($0.at) < 8 * 86400 }
             let hits = allHits.filter { $0.at > lastSuccess }
             // Use whichever member window sampled usage most recently.
             let org = accountUuid?.split(separator: "/").last.map(String.init)
@@ -313,9 +317,32 @@ public final class Monitor {
 
         let snap = Snapshot(at: now, accounts: accounts, queue: engine.items,
                             engineOwner: engine.owner, scanning: false,
-                            moves: moves.all(), locations: locations, profiles: profiles)
+                            moves: moveList, locations: locations, profiles: profiles)
         snapshot = snap
         onSnapshot?(snap)
+    }
+
+    /// When each chat last landed in another account: the latest finished move per chat whose
+    /// source and destination are different accounts (or orgs). An undo only reverses a move,
+    /// so it isn't an arrival: the chat's hits from before the undone move stay where they were.
+    static func arrivals(_ moves: [PendingMove]) -> [String: (profileId: String, at: Date)] {
+        var out: [String: (profileId: String, at: Date)] = [:]
+        for m in moves where m.status == .done && m.undoOf == nil {
+            guard let at = m.finishedAt,
+                  m.from.accountUuid != m.to.accountUuid || m.from.orgUuid != m.to.orgUuid else { continue }
+            if let prev = out[m.sessionId], prev.at >= at { continue }
+            out[m.sessionId] = (m.to.profileId, at)
+        }
+        return out
+    }
+
+    /// A chat's last limit hit as it counts for the account made of `members`: a hit from before
+    /// the chat was moved into this account belongs to the old account and is dropped.
+    static func accountHit(_ hit: RateLimitHit?, sessionId: String, members: Set<String>,
+                           arrivals: [String: (profileId: String, at: Date)]) -> RateLimitHit? {
+        guard let hit else { return nil }
+        if let a = arrivals[sessionId], members.contains(a.profileId), hit.at < a.at { return nil }
+        return hit
     }
 
     /// Resolves compatibility symlinks (e.g. ~/Claude-Profiles/account-1 -> claude-3-…).

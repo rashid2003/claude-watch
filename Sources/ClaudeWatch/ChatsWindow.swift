@@ -63,7 +63,7 @@ struct ChatsWindow: View {
         .onAppear { pickInitial() }
         .onChange(of: model.chatsProfile) { pickInitial() }
         .onChange(of: locationId) { selection = []; reload() }
-        .onChange(of: model.snapshot?.moves.filter { $0.status != .pending }.count) { reload() }
+        .onChange(of: model.snapshot?.moves.filter { $0.status != .pending }.map { $0.id + $0.status.rawValue }) { reload() }
     }
 
     func moveMenu(_ items: [ChatRecord], title: String) -> some View {
@@ -113,7 +113,8 @@ struct RecentMoves: View {
                         Text(m.from.profileName + " → " + m.to.profileName).foregroundStyle(.secondary).lineLimit(1)
                         if m.status != .done, let n = m.note { Text(n).foregroundStyle(.secondary).lineLimit(1) }
                         Spacer()
-                        if m.status == .done, model.pendingMove(for: m.sessionId) == nil {
+                        if m.status == .done, model.pendingMove(for: m.sessionId) == nil,
+                           model.snapshot?.moves.last(where: { $0.sessionId == m.sessionId && $0.status == .done })?.id == m.id {
                             Button("Undo") { model.undoMove(m.id) }.buttonStyle(.link)
                         }
                     }

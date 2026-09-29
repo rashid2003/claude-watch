@@ -108,6 +108,16 @@ public final class RetryEngine {
     /// Whether a waiting item should be sent now. `limitedUntil` is the account's reset time when it
     /// is limited (nil otherwise). Forced items go out even while the account is still limited; if
     /// they hit the limit again the relimited path puts them back to waiting.
+    /// A chat moved to another profile: a waiting item follows it and drops the old account's
+    /// reset, waiting for the new account's instead (or just the retry delay if it's free).
+    /// A forced "Retry now" stays forced.
+    static func rehomed(_ it: RetryItem, to profileId: String, limitedUntil: Date?) -> RetryItem {
+        var it = it
+        it.profileId = profileId
+        if it.status == .waiting, it.resetsAt != forcedAt { it.resetsAt = limitedUntil ?? it.failedAt }
+        return it
+    }
+
     static func isDue(_ it: RetryItem, limitedUntil: Date?, retryDelay: TimeInterval, now: Date) -> Bool {
         guard it.status == .waiting else { return false }
         if it.resetsAt == forcedAt { return true }
@@ -213,7 +223,12 @@ public final class RetryEngine {
         // 2. Resolve / verify.
         for i in items.indices {
             guard let s = byId[items[i].sessionId] else { continue }
-            if items[i].profileId != s.info.profileId { items[i].profileId = s.info.profileId; changed = true }
+            if items[i].profileId != s.info.profileId {
+                let a = acct[s.info.profileId]
+                items[i] = Self.rehomed(items[i], to: s.info.profileId,
+                                        limitedUntil: a?.state == .limited ? a?.limitedUntil : nil)
+                changed = true
+            }
             let it = items[i]
             let tail = s.tail
             switch it.status {
