@@ -11,7 +11,7 @@ struct SessionRowView: View {
         let prompt = store.snapshot?.prompts(forChat: session.id).first
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                Text("▸").foregroundStyle(Theme.clay)
+                Text("▸").foregroundStyle(Theme.clay).fixedSize()
                 Text(session.info.title.isEmpty ? "untitled chat" : session.info.title)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -138,16 +138,21 @@ struct AccountRowView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
-            Circle().fill(Theme.color(account.state)).frame(width: 7, height: 7)
-            Text(account.profile.name).fontWeight(.semibold).lineLimit(1)
-            Text("· " + account.profile.id + (account.alsoOpenIn.isEmpty ? "" : " + " + account.alsoOpenIn.joined(separator: ", ")))
+        // On a phone the Mac's one-line "name · id  badge" doesn't fit, so the id gets its own line.
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Circle().fill(Theme.color(account.state)).frame(width: 7, height: 7)
+                Text(account.profile.name).fontWeight(.semibold).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                Badge(text: badge, color: Theme.color(account.state)).fixedSize()
+            }
+            .font(Theme.mono)
+            Text(account.profile.id + (account.alsoOpenIn.isEmpty ? "" : " + " + account.alsoOpenIn.joined(separator: ", ")))
+                .font(Theme.monoTiny)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            Spacer(minLength: 4)
-            Badge(text: badge, color: Theme.color(account.state))
+                .padding(.leading, 13)
         }
-        .font(Theme.mono)
         .accessibilityElement(children: .combine)
     }
 

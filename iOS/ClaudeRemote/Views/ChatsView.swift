@@ -5,7 +5,7 @@ import WatchProtocol
 struct ChatsView: View {
     @Environment(RemoteStore.self) private var store
     @State private var search = ""
-    @State private var accountFilter: String?   // profile id
+    @SceneStorage("chats.account") private var accountFilter: String?   // account id; nil = all
     var scrollToTop = 0
 
     private struct Groups {
@@ -31,7 +31,8 @@ struct ChatsView: View {
         let g = groups
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                StatusStrip(section: filterName.map { "chats · \($0)" } ?? "chats")
+                StatusStrip(section: filterName.map { "chats · \(AccountSwitcher.shortName($0))" } ?? "chats")
+                AccountSwitcher(selection: $accountFilter)
                 if store.snapshot == nil {
                     Divider()
                     EmptyNote(text: "Waiting for your Mac… chats appear once ClaudeWatch answers.")
@@ -52,8 +53,9 @@ struct ChatsView: View {
         .remoteHeader()
         .searchable(text: $search, prompt: "search chats")
         .refreshable { store.reconnect() }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) { filterMenu }
+        .onChange(of: store.snapshot?.accounts.map(\.id)) { _, ids in
+            // The chosen account went away (signed out, merged): fall back to all.
+            if let f = accountFilter, let ids, !ids.contains(f) { accountFilter = nil }
         }
     }
 
@@ -69,26 +71,11 @@ struct ChatsView: View {
                 Circle().fill(color).frame(width: 6, height: 6)
             }
             ForEach(rows) { s in
-                NavigationLink(value: ChatRoute(id: s.id)) { SessionRowView(session: s) }
+                NavigationLink(value: ChatRoute(id: s.id)) { SessionRowView(session: s, showAccount: accountFilter == nil) }
                     .buttonStyle(.row)
                     .foregroundStyle(.primary)
             }
         }
-    }
-
-    private var filterMenu: some View {
-        Menu {
-            Picker("Account", selection: $accountFilter) {
-                Text("all accounts").tag(String?.none)
-                ForEach(store.snapshot?.accounts ?? []) { a in
-                    Text(a.profile.name).tag(String?.some(a.id))
-                }
-            }
-        } label: {
-            Image(systemName: accountFilter == nil
-                  ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
-        }
-        .accessibilityLabel("Filter by account")
     }
 }
 

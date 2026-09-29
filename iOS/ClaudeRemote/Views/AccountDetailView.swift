@@ -48,7 +48,7 @@ struct AccountDetailView: View {
                             SectionTitle("windows")
                             ForEach(a.memberProfileIds, id: \.self) { id in
                                 HStack(spacing: 6) {
-                                    Text("▸").foregroundStyle(Theme.clay)
+                                    Text("▸").foregroundStyle(Theme.clay).fixedSize()
                                     Text(store.snapshot?.accountName(forProfile: id) ?? id)
                                     Text("· " + id).foregroundStyle(.secondary)
                                 }

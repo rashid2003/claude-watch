@@ -67,7 +67,7 @@ struct MacView: View {
                     ForEach(NotifyEvent.allCases, id: \.self) { e in
                         Toggle(isOn: notifyBinding(e)) {
                             HStack(spacing: 6) {
-                                Text("▸").foregroundStyle(Theme.clay)
+                                Text("▸").foregroundStyle(Theme.clay).fixedSize()
                                 Text(title(e))
                             }
                         }
@@ -82,7 +82,7 @@ struct MacView: View {
                 SectionTitle("security")
                 Toggle(isOn: $lock.enabled) {
                     HStack(spacing: 6) {
-                        Text("▸").foregroundStyle(Theme.clay)
+                        Text("▸").foregroundStyle(Theme.clay).fixedSize()
                         Text("require face id")
                     }
                 }
