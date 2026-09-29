@@ -1,5 +1,6 @@
 import Foundation
 import WatchCore
+import WatchBridge
 
 // MARK: - ANSI helpers (Claude Code palette)
 
@@ -164,6 +165,11 @@ func usage() -> Never {
       claude-watch move <chat> --to <profile>[:<org>] [--from <profile>] [--now]
                                        move a chat (id or title words) to another window
       claude-watch moves [--undo <id> | --cancel <id>]
+      claude-watch set-apns-key <AuthKey.p8> --key-id <id> --team-id <id> [--topic <bundle id>]
+                                       enable iPhone push notifications (key from developer.apple.com)
+      claude-watch probe-prompt <chat> dry-run answering a prompt: lists the window's buttons, presses nothing
+      claude-watch prompt-tool --socket <path> --session <id>
+                                       (internal) permission prompt MCP server for iPhone replies
     """)
     exit(0)
 }
@@ -268,6 +274,35 @@ case "set-token":
     guard let raw = String(validatingUTF8: getpass("")), !raw.isEmpty else { print("Nothing stored."); exit(1) }
     print(TokenStore.set(raw.trimmingCharacters(in: .whitespacesAndNewlines), for: args[1])
           ? A.green("Stored in Keychain.") : A.red("Couldn't write to Keychain."))
+
+case "prompt-tool":
+    // Started by `claude` itself during an iPhone reply; speaks MCP on stdin/stdout.
+    func flag(_ n: String) -> String? { args.firstIndex(of: n).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
+    guard let socket = flag("--socket"), let session = flag("--session") else { usage() }
+    PromptTool.serve(socketPath: socket, sessionId: session)
+
+case "set-apns-key":
+    func flag(_ n: String) -> String? { args.firstIndex(of: n).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
+    guard args.count >= 2, let keyId = flag("--key-id"), let teamId = flag("--team-id"),
+          let pem = try? String(contentsOfFile: (args[1] as NSString).expandingTildeInPath, encoding: .utf8) else { usage() }
+    let key = APNsKey(keyId: keyId, teamId: teamId, pem: pem, topic: flag("--topic") ?? "dev.lajward.ClaudeRemote")
+    do { _ = try key.signingKey() } catch { print(A.red("That file isn't an APNs .p8 key: \(error)")); exit(1) }
+    print(key.save() ? A.green("Stored in Keychain. Restart ClaudeWatch to start sending pushes.") : A.red("Couldn't write to Keychain."))
+
+case "probe-prompt":
+    let query = args.dropFirst().joined(separator: " ")
+    let cfg = Config.load()
+    let profiles = ProfileDiscovery.discover(config: cfg)
+    let index = SessionIndex()
+    let all = profiles.flatMap { index.sessions(for: $0) }
+    guard !query.isEmpty, let s = all.first(where: { $0.id == query || $0.cliSessionId == query })
+            ?? all.first(where: { $0.title.localizedCaseInsensitiveContains(query) }),
+          let p = profiles.first(where: { $0.id == s.profileId }) else { print("No chat matches “\(query)”"); exit(1) }
+    print("Opening “\(s.title)” in \(p.name)…")
+    switch DesktopActions.answer(decision: .allow, session: s, profile: p, dryRun: true) {
+    case .success(let m): print(m)
+    case .failure(let e): print(A.red(e.message)); exit(1)
+    }
 
 case "move":
     guard let toAt = args.firstIndex(of: "--to"), toAt + 1 < args.count else { usage() }

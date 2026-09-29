@@ -136,6 +136,15 @@ public enum UIRetry {
     }
 
     static func send(message: String, session: SessionInfo, profile: Profile) -> Result<String, RetryError> {
+        UILock.run { sendLocked(message: message, session: session, profile: profile) }
+    }
+
+    /// Types `message` into the chat in its desktop window (fallback for remote replies without a CLI token).
+    public static func type(message: String, session: SessionInfo, profile: Profile) -> Result<String, RetryError> {
+        send(message: message, session: session, profile: profile)
+    }
+
+    private static func sendLocked(message: String, session: SessionInfo, profile: Profile) -> Result<String, RetryError> {
         guard isTrusted else {
             requestTrust()
             return .failure(RetryError(message: "Waiting for Accessibility permission", blocked: true))
@@ -177,7 +186,7 @@ public enum UIRetry {
         return .success("pid \(pid)")
     }
 
-    private static func attr(_ el: AXUIElement, _ name: String) -> AnyObject? {
+    static func attr(_ el: AXUIElement, _ name: String) -> AnyObject? {
         var v: CFTypeRef?
         return AXUIElementCopyAttributeValue(el, name as CFString, &v) == .success ? v : nil
     }

@@ -79,3 +79,22 @@ final class PromptDetectorTests: XCTestCase {
         XCTAssertEqual(p.id, "local_1/q1")
     }
 }
+
+final class DesktopActionsTests: XCTestCase {
+    func testMatchButton() {
+        let b: [(title: String, y: CGFloat)] = [("Allow", 100), ("Deny", 100), ("Allow once", 500), ("Always allow for this project", 500),
+                                                ("No, and tell Claude what to do differently", 520), ("Settings", 900)]
+        XCTAssertEqual(DesktopActions.matchButton(b, for: .allow), 2, "lowest matching allow")
+        XCTAssertEqual(DesktopActions.matchButton(b, for: .allowAlways), 3)
+        XCTAssertEqual(DesktopActions.matchButton(b, for: .deny), 4)
+        XCTAssertNil(DesktopActions.matchButton([("Settings", 1), ("Don't allow", 2)], for: .allow))
+        XCTAssertEqual(DesktopActions.matchButton([("Don’t allow", 2)], for: .deny), 0)
+    }
+
+    func testNewChatURL() {
+        let u = DesktopActions.newChatURL(cwd: "/Users/me/My Project", prompt: "fix a+b & c")
+        XCTAssertTrue(u.hasPrefix("claude://code/new?folder=/Users/me/My%20Project&q="))
+        XCTAssertTrue(u.contains("a%2Bb"))
+        XCTAssertTrue(u.contains("%26"))
+    }
+}
