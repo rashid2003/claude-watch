@@ -1,0 +1,179 @@
+import SwiftUI
+import WatchProtocol
+
+// MARK: - Header
+
+/// Inline nav bar with "✻ claude-remote" as the title, and the Mac's connection dot plus a refresh glyph.
+private struct RemoteHeader: ViewModifier {
+    @Environment(RemoteStore.self) private var store
+
+    func body(content: Content) -> some View {
+        content
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 6) {
+                        Text("✻").foregroundStyle(Theme.clay)
+                        Text("claude-remote")
+                    }
+                    .font(Theme.monoTitle)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Claude Remote")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        store.reconnect()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.clockwise").font(.footnote.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            ConnectionDot(connection: store.connection)
+                        }
+                    }
+                    .accessibilityLabel("Refresh, \(Theme.label(store.connection))")
+                }
+            }
+    }
+}
+
+extension View {
+    func remoteHeader() -> some View { modifier(RemoteHeader()) }
+}
+
+/// "chats · updated 12s ago" — and, when the stream isn't live, "· reconnecting  retry".
+struct StatusStrip: View {
+    @Environment(RemoteStore.self) private var store
+    let section: String
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 5)) { ctx in
+            HStack(spacing: 6) {
+                Text(section).font(Theme.monoBold)
+                Text("·").foregroundStyle(.tertiary)
+                Text(updated(ctx.date)).foregroundStyle(.secondary)
+                if store.connection != .connected {
+                    Text("·").foregroundStyle(.tertiary)
+                    Text(Theme.label(store.connection)).foregroundStyle(Theme.color(store.connection))
+                }
+                Spacer(minLength: 4)
+                if store.connection == .offline {
+                    Button("retry") { store.reconnect() }.buttonStyle(.clayLink)
+                }
+            }
+            .font(Theme.monoSmall)
+            .lineLimit(1)
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func updated(_ now: Date) -> String {
+        guard let at = store.lastUpdated else { return "waiting for mac…" }
+        return "updated " + Fmt.ago(at, now: now)
+    }
+}
+
+/// One-line connection notice for screens without a status strip (chat, sheets).
+struct ConnectionBanner: View {
+    @Environment(RemoteStore.self) private var store
+
+    var body: some View {
+        if store.connection != .connected {
+            TimelineView(.periodic(from: .now, by: 15)) { ctx in
+                HStack(spacing: 6) {
+                    ConnectionDot(connection: store.connection)
+                    Text(text(ctx.date)).foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    if store.connection == .offline {
+                        Button("retry") { store.reconnect() }.buttonStyle(.clayLink)
+                    }
+                }
+                .font(Theme.monoSmall)
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 5).fill(Theme.code))
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func text(_ now: Date) -> String {
+        guard let at = store.lastUpdated else { return Theme.label(store.connection) + "…" }
+        return "updated \(Fmt.ago(at, now: now)) · \(Theme.label(store.connection))"
+    }
+}
+
+/// Plain background placeholder, e.g. before the first snapshot.
+struct EmptyNote: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(Theme.mono)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 12)
+    }
+}
+
+// MARK: - Scroll to top
+
+/// Scrolls the modified ScrollView back to the top whenever `trigger` changes (tab bar re-tap).
+private struct ScrollToTop: ViewModifier {
+    let trigger: Int
+    @State private var position = ScrollPosition(edge: .top)
+
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position)
+            .onChange(of: trigger) { _, _ in
+                withAnimation(.snappy) { position.scrollTo(edge: .top) }
+            }
+    }
+}
+
+extension View {
+    func scrollToTop(on trigger: Int) -> some View { modifier(ScrollToTop(trigger: trigger)) }
+}
+
+// MARK: - Toast
+
+private struct ToastModifier: ViewModifier {
+    @Environment(RemoteStore.self) private var store
+
+    func body(content: Content) -> some View {
+        content.overlay(alignment: .top) {
+            if let t = store.toast {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(t.isError ? "✗" : "✓").foregroundStyle(t.isError ? Theme.red : Theme.green)
+                    Text(t.message)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                    Button {
+                        store.toast = nil
+                    } label: {
+                        Text("×").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss")
+                }
+                .font(Theme.monoSmall)
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Theme.background))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(t.isError ? Theme.red.opacity(0.6) : Theme.green.opacity(0.6)))
+                .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .task(id: t.id) {
+                    try? await Task.sleep(for: .seconds(t.isError ? 8 : 3))
+                    if store.toast?.id == t.id { store.toast = nil }
+                }
+            }
+        }
+        .animation(.spring(duration: 0.3), value: store.toast)
+    }
+}
+
+extension View {
+    func toast() -> some View { modifier(ToastModifier()) }
+}

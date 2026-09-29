@@ -1,0 +1,414 @@
+import Foundation
+import Observation
+import WatchProtocol
+
+struct Toast: Identifiable, Equatable {
+    let id = UUID()
+    var message: String
+    var isError: Bool
+}
+
+enum DeepLink: Equatable {
+    case chat(String)
+    case account(String)
+}
+
+/// Everything the screens show, fed by one WebSocket plus a few REST calls. Commands go through here so
+/// their pending state and failures surface in one place.
+@Observable @MainActor
+final class RemoteStore {
+    enum Connection: Equatable {
+        case connecting, connected, reconnecting, offline
+    }
+
+    private(set) var credentials: Credentials?
+    private(set) var snapshot: Snapshot?
+    /// When the snapshot on screen arrived (from the Mac, or from the disk cache).
+    private(set) var lastUpdated: Date?
+    private(set) var connection: Connection = .offline
+    private(set) var bridgeStatus: BridgeStatus?
+    private(set) var lastError: String?
+
+    // The chat on screen.
+    private(set) var openChatId: String?
+    private(set) var messages: [ChatMessage] = []
+    private(set) var olderCursor: Int?
+    private(set) var loadingOlder = false
+    private(set) var messagesLoaded = false
+
+    private(set) var jobs: [String: Job] = [:]
+    private var pending: [String: RemoteCommand] = [:]    // by requestId
+    var toast: Toast?
+    var deepLink: DeepLink?
+
+    @ObservationIgnored private var client: RemoteClient?
+    @ObservationIgnored private var streamTask: Task<Void, Never>?
+    @ObservationIgnored private var socket: StreamSocket?
+    @ObservationIgnored private var failures = 0
+    @ObservationIgnored private var lastMessageAt = Date()
+    @ObservationIgnored private var messageIndex: [String: Int] = [:]
+    @ObservationIgnored private var lastCacheWrite = Date.distantPast
+    @ObservationIgnored private var isPreview = false
+
+    init() {
+        credentials = Keychain.load()
+        if let credentials { client = RemoteClient(credentials: credentials) }
+        if credentials != nil, let cached = SnapshotCache.load() {
+            snapshot = cached.snapshot
+            lastUpdated = cached.receivedAt
+        }
+    }
+
+    /// For previews: a store that never touches the network, Keychain or disk.
+    init(preview snapshot: Snapshot?, connection: Connection = .connected, messages: [ChatMessage] = []) {
+        self.snapshot = snapshot
+        self.lastUpdated = snapshot?.at
+        self.connection = connection
+        self.messages = messages
+        self.messagesLoaded = true
+        self.isPreview = true
+        if snapshot != nil {
+            credentials = Credentials(baseURLs: [URL(string: "http://127.0.0.1:7433")!], token: "preview",
+                                      deviceId: "dev-preview", macName: "Rashid's MacBook Pro")
+        }
+        bridgeStatus = BridgeStatus(macName: "Rashid's MacBook Pro", version: "1.4.0",
+                                    warnings: ["Accessibility permission missing — prompts can't be answered"],
+                                    pushConfigured: true, deviceId: "dev-preview",
+                                    notify: ["prompt": true, "finished": true, "failed": true, "account": false])
+    }
+
+    var isPaired: Bool { credentials != nil }
+    var canSend: Bool { connection == .connected }
+    var prompts: [PendingPrompt] { snapshot?.prompts ?? [] }
+
+    func isPending(_ key: String) -> Bool { pending.values.contains { $0.key == key } }
+    func isPending(prefix: String) -> Bool { pending.values.contains { $0.key.hasPrefix(prefix) } }
+
+    // MARK: Lifecycle
+
+    func start() {
+        guard client != nil, streamTask == nil else { return }
+        failures = 0
+        if connection != .connected { connection = .connecting }
+        streamTask = Task { [weak self] in await self?.runStream() }
+    }
+
+    func stop() {
+        if isPreview { return }
+        streamTask?.cancel()
+        streamTask = nil
+        socket?.close()
+        socket = nil
+        if connection == .connected { connection = .reconnecting }
+    }
+
+    /// Reconnect now instead of waiting for the backoff (pull to refresh, return to foreground).
+    func reconnect() {
+        stop()
+        start()
+    }
+
+    func didPair(_ c: Credentials) {
+        Keychain.save(c)
+        credentials = c
+        client = RemoteClient(credentials: c)
+        snapshot = nil
+        lastUpdated = nil
+        start()
+        Task { await registerPushIfNeeded() }
+    }
+
+    /// Unpairs on the Mac, then forgets the pairing here. With `force`, forgets even if the Mac can't be reached.
+    func unpair(force: Bool = false) async -> Bool {
+        if let client {
+            do { try await client.unpair() } catch RemoteError.unauthorized {
+                // Already gone on the Mac.
+            } catch {
+                if !force { toast = Toast(message: error.localizedDescription, isError: true); return false }
+            }
+        }
+        forgetPairing()
+        return true
+    }
+
+    private func forgetPairing() {
+        stop()
+        Keychain.delete()
+        SnapshotCache.clear()
+        UserDefaults.standard.removeObject(forKey: Self.registeredTokenKey)
+        credentials = nil
+        client = nil
+        snapshot = nil
+        bridgeStatus = nil
+        lastUpdated = nil
+        messages = []
+        openChatId = nil
+        pending = [:]
+        jobs = [:]
+        connection = .offline
+    }
+
+    private func lostPairing() {
+        forgetPairing()
+        toast = Toast(message: "Your Mac no longer recognises this iPhone. Pair again.", isError: true)
+    }
+
+    // MARK: Stream
+
+    private func runStream() async {
+        var delay: Double = 1
+        while !Task.isCancelled, let client {
+            do {
+                let s = try await client.openStream()
+                socket = s
+                lastMessageAt = Date()
+                let pinger = Task { [weak self] in await self?.keepAlive(s) }
+                defer { pinger.cancel() }
+                try await s.send(WSClientMessage(type: .ping))   // a quick pong proves the socket is up
+                var first = true
+                while !Task.isCancelled {
+                    let m = try await s.receive()
+                    lastMessageAt = Date()
+                    if first {
+                        first = false
+                        delay = 1
+                        didConnect(s)
+                    }
+                    handle(m)
+                }
+            } catch RemoteError.unauthorized {
+                lostPairing()
+                return
+            } catch {
+                lastError = error.localizedDescription
+            }
+            socket?.close()
+            socket = nil
+            if Task.isCancelled { return }
+            failures += 1
+            connection = failures < 3 ? .reconnecting : .offline
+            await client.forgetBase()
+            try? await Task.sleep(for: .seconds(delay))
+            delay = min(delay * 2, 30)
+        }
+    }
+
+    /// Pings every 15 s; a connection silent for 45 s is dropped so the loop reconnects.
+    private func keepAlive(_ s: StreamSocket) async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(15))
+            if Task.isCancelled { return }
+            if Date().timeIntervalSince(lastMessageAt) > 45 { s.close(); return }
+            try? await s.send(WSClientMessage(type: .ping))
+        }
+    }
+
+    private func didConnect(_ s: StreamSocket) {
+        connection = .connected
+        failures = 0
+        lastError = nil
+        if let id = openChatId {
+            Task { try? await s.send(WSClientMessage(type: .subscribe, chatId: id)) }
+        }
+        Task {
+            await refreshStatus()
+            await registerPushIfNeeded()
+        }
+    }
+
+    private func handle(_ m: WSServerMessage) {
+        switch m {
+        case .snapshot(let s):
+            snapshot = s
+            lastUpdated = Date()
+            if Date().timeIntervalSince(lastCacheWrite) > 5 {
+                lastCacheWrite = Date()
+                let at = lastUpdated ?? Date()
+                Task.detached(priority: .utility) { SnapshotCache.save(s, receivedAt: at) }
+            }
+        case .messages(let chatId, let msgs, let reset, let before):
+            guard chatId == openChatId else { return }
+            if reset {
+                messages = msgs
+                olderCursor = before
+                rebuildIndex()
+            } else {
+                upsert(msgs)
+            }
+            messagesLoaded = true
+        case .job(let j):
+            record(j)
+        case .pong:
+            break
+        }
+    }
+
+    // MARK: Open chat
+
+    func open(chat id: String) {
+        guard openChatId != id else { return }
+        openChatId = id
+        if isPreview { return }
+        messages = []
+        messageIndex = [:]
+        olderCursor = nil
+        messagesLoaded = false
+        if let socket, connection == .connected {
+            Task { try? await socket.send(WSClientMessage(type: .subscribe, chatId: id)) }
+        }
+    }
+
+    func close(chat id: String) {
+        guard openChatId == id else { return }
+        openChatId = nil
+        if let socket, connection == .connected {
+            Task { try? await socket.send(WSClientMessage(type: .unsubscribe, chatId: id)) }
+        }
+    }
+
+    func loadOlder() async {
+        guard let id = openChatId, let cursor = olderCursor, !loadingOlder, let client else { return }
+        loadingOlder = true
+        defer { loadingOlder = false }
+        do {
+            let page = try await client.messages(chatId: id, before: cursor, limit: 50)
+            guard id == openChatId else { return }
+            let fresh = page.messages.filter { messageIndex[$0.id] == nil }
+            messages.insert(contentsOf: fresh, at: 0)
+            olderCursor = page.before
+            rebuildIndex()
+        } catch {
+            show(error)
+        }
+    }
+
+    private func upsert(_ msgs: [ChatMessage]) {
+        for m in msgs {
+            if let i = messageIndex[m.id], i < messages.count, messages[i].id == m.id {
+                messages[i] = m
+            } else {
+                messageIndex[m.id] = messages.count
+                messages.append(m)
+            }
+        }
+    }
+
+    private func rebuildIndex() {
+        messageIndex = Dictionary(messages.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { _, b in b })
+    }
+
+    // MARK: Commands
+
+    /// Sends a command and waits for its final job. Nothing is queued while offline.
+    @discardableResult
+    func perform(_ c: RemoteCommand) async -> Job? {
+        if isPreview { return await simulate(c) }
+        guard let client, canSend else {
+            toast = Toast(message: "Your Mac is offline — nothing was sent.", isError: true)
+            return nil
+        }
+        pending[c.requestId] = c
+        defer { pending[c.requestId] = nil }
+        do {
+            let job = try await client.perform(c)
+            record(job)
+            let final = await waitForFinal(job, c)
+            if final.status == .failed || final.status == .blocked {
+                toast = Toast(message: final.reason ?? "\(c.label) failed.", isError: true)
+            }
+            return final
+        } catch RemoteError.unauthorized {
+            lostPairing()
+            return nil
+        } catch {
+            show(error)
+            return nil
+        }
+    }
+
+    /// Demo mode: pretend the Mac did it after a moment.
+    private func simulate(_ c: RemoteCommand) async -> Job {
+        pending[c.requestId] = c
+        try? await Task.sleep(for: .seconds(1))
+        pending[c.requestId] = nil
+        return Job(id: "demo-" + c.requestId, requestId: c.requestId, command: c.label, target: nil, status: .done, at: Date())
+    }
+
+    /// Final status arrives over the WebSocket; the command is also resent now and then (same requestId,
+    /// so the bridge just reports the job) in case that event was lost in a reconnect.
+    private func waitForFinal(_ start: Job, _ c: RemoteCommand) async -> Job {
+        var job = start
+        var waited: Double = 0, sinceResend: Double = 0
+        while !job.status.isFinal && waited < 600 {
+            try? await Task.sleep(for: .milliseconds(250))
+            waited += 0.25; sinceResend += 0.25
+            if let j = jobs[job.id] { job = j }
+            if !job.status.isFinal, canSend, sinceResend >= (waited < 30 ? 5 : 15), let client {
+                sinceResend = 0
+                if let j = try? await client.perform(c) { record(j); job = j }
+            }
+        }
+        return job
+    }
+
+    private func record(_ j: Job) {
+        if let old = jobs[j.id], old.status.isFinal, !j.status.isFinal { return }
+        jobs[j.id] = j
+        if jobs.count > 200 {
+            for old in jobs.values.sorted(by: { $0.at < $1.at }).prefix(jobs.count - 150) { jobs[old.id] = nil }
+        }
+    }
+
+    func show(_ error: Error) {
+        toast = Toast(message: error.localizedDescription, isError: true)
+    }
+
+    // MARK: Reads
+
+    func folders(profileId: String) async -> [FolderSuggestion] {
+        if isPreview { return Fixtures.folders }
+        return (try? await client?.folders(profileId: profileId)) ?? []
+    }
+
+    func usage(profileId: String) async throws -> [UsageSample] {
+        if isPreview { return Fixtures.usage }
+        guard let client else { return [] }
+        return try await client.usage(profileId: profileId)
+    }
+
+    func refreshStatus() async {
+        guard let client else { return }
+        if let s = try? await client.status() { bridgeStatus = s }
+    }
+
+    // MARK: Device settings
+
+    func setNotify(_ event: NotifyEvent, on: Bool) async {
+        guard let client else { return }
+        do { bridgeStatus = try await client.register(DeviceRegistration(notify: [event.rawValue: on])) } catch { show(error) }
+    }
+
+    static let apnsTokenKey = "apnsToken"
+    private static let registeredTokenKey = "apnsRegistered"
+
+    func didReceivePushToken(_ hex: String) {
+        UserDefaults.standard.set(hex, forKey: Self.apnsTokenKey)
+        Task { await registerPushIfNeeded() }
+    }
+
+    /// Sends the APNs token to the Mac once per pairing (and again if it changes).
+    private func registerPushIfNeeded() async {
+        guard let client, let credentials, let token = UserDefaults.standard.string(forKey: Self.apnsTokenKey) else { return }
+        let marker = credentials.deviceId + ":" + token
+        guard UserDefaults.standard.string(forKey: Self.registeredTokenKey) != marker else { return }
+        #if DEBUG
+        let env = "sandbox"
+        #else
+        let env = "production"
+        #endif
+        if let s = try? await client.register(DeviceRegistration(apnsToken: token, environment: env)) {
+            bridgeStatus = s
+            UserDefaults.standard.set(marker, forKey: Self.registeredTokenKey)
+        }
+    }
+}
