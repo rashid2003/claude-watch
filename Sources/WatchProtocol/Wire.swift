@@ -227,14 +227,15 @@ public struct WSClientMessage: Codable, Sendable, Equatable {
 
 public enum WSServerMessage: Sendable {
     case snapshot(Snapshot)
-    /// New messages of the subscribed chat. `reset` = replace what you have (first batch).
-    case messages(chatId: String, messages: [ChatMessage], reset: Bool)
+    /// New or updated messages of the subscribed chat (upsert by id). `reset` = replace what you have
+    /// (the first batch after subscribing); `before` is then the cursor for older pages.
+    case messages(chatId: String, messages: [ChatMessage], reset: Bool, before: Int?)
     case job(Job)
     case pong
 }
 
 extension WSServerMessage: Codable {
-    enum CodingKeys: String, CodingKey { case type, snapshot, chatId, messages, reset, job }
+    enum CodingKeys: String, CodingKey { case type, snapshot, chatId, messages, reset, before, job }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -243,7 +244,8 @@ extension WSServerMessage: Codable {
         case "messages":
             self = .messages(chatId: try c.decode(String.self, forKey: .chatId),
                              messages: try c.decode([ChatMessage].self, forKey: .messages),
-                             reset: try c.decodeIfPresent(Bool.self, forKey: .reset) ?? false)
+                             reset: try c.decodeIfPresent(Bool.self, forKey: .reset) ?? false,
+                             before: try c.decodeIfPresent(Int.self, forKey: .before))
         case "job": self = .job(try c.decode(Job.self, forKey: .job))
         case "pong": self = .pong
         case let t: throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(t)")
@@ -254,9 +256,10 @@ extension WSServerMessage: Codable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .snapshot(let s): try c.encode("snapshot", forKey: .type); try c.encode(s, forKey: .snapshot)
-        case .messages(let id, let m, let reset):
+        case .messages(let id, let m, let reset, let before):
             try c.encode("messages", forKey: .type); try c.encode(id, forKey: .chatId)
             try c.encode(m, forKey: .messages); try c.encode(reset, forKey: .reset)
+            try c.encodeIfPresent(before, forKey: .before)
         case .job(let j): try c.encode("job", forKey: .type); try c.encode(j, forKey: .job)
         case .pong: try c.encode("pong", forKey: .type)
         }

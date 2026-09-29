@@ -42,13 +42,13 @@ final class WireTests: XCTestCase {
     func testServerMessages() throws {
         let job = Job(id: "j1", requestId: "r1", command: "reply", target: "local_1", status: .done, at: t)
         let msg = ChatMessage(id: "u1", kind: .tool, at: t, text: "Ran swift build", toolName: "Bash", toolOK: true)
-        for m in [WSServerMessage.snapshot(sampleSnapshot()), .messages(chatId: "local_1", messages: [msg], reset: true),
+        for m in [WSServerMessage.snapshot(sampleSnapshot()), .messages(chatId: "local_1", messages: [msg], reset: true, before: 7),
                   .job(job), .pong] {
             let back = try roundTrip(m)
             switch (m, back) {
             case (.snapshot, .snapshot), (.job, .job), (.pong, .pong): break
-            case (.messages(_, let a, let r1), .messages(let id, let b, let r2)):
-                XCTAssertEqual(id, "local_1"); XCTAssertEqual(a, b); XCTAssertEqual(r1, r2)
+            case (.messages(_, let a, let r1, let c1), .messages(let id, let b, let r2, let c2)):
+                XCTAssertEqual(id, "local_1"); XCTAssertEqual(a, b); XCTAssertEqual(r1, r2); XCTAssertEqual(c1, c2)
             default: XCTFail("type changed: \(m) -> \(back)")
             }
         }
