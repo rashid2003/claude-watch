@@ -64,7 +64,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         server.start()
         // Development: pair the Simulator without the menu (CLAUDE_WATCH_DEV_PAIR_CODE=123456).
         if let code = ProcessInfo.processInfo.environment["CLAUDE_WATCH_DEV_PAIR_CODE"], code.count == 6 {
-            server.pairing.open(code: code)
+            server.pairing.open(code: code, lifetime: 3600)
         }
     }
 

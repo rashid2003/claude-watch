@@ -110,9 +110,9 @@ public final class PairingGate: @unchecked Sendable {
     public var isOpen: Bool { lock.withLock { code != nil && Date() < expires } }
 
     @discardableResult
-    public func open(now: Date = Date(), code fixed: String? = nil) -> String {
+    public func open(now: Date = Date(), code fixed: String? = nil, lifetime: TimeInterval = PairingGate.lifetime) -> String {
         let c = fixed ?? String(format: "%06d", Int.random(in: 0..<1_000_000))
-        lock.withLock { code = c; expires = now.addingTimeInterval(Self.lifetime); failures = 0 }
+        lock.withLock { code = c; expires = now.addingTimeInterval(lifetime); failures = 0 }
         return c
     }
 
