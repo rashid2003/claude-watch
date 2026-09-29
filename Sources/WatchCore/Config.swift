@@ -27,6 +27,8 @@ public enum Paths {
     public static var remoteLog: URL { support.appendingPathComponent("remote-log.jsonl") }
     /// Unix socket for headless approval requests (paths are limited to 104 bytes).
     public static var bridgeSocket: String { support.appendingPathComponent("bridge.sock").path }
+    /// Retry requests for the engine owner, one per line (see `RetryRequest`).
+    public static var retryRequest: URL { support.appendingPathComponent("retry-request") }
     public static var logs: URL {
         let url = support.appendingPathComponent("logs")
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

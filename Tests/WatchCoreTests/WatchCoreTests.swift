@@ -94,3 +94,227 @@ final class RunnerTests: XCTestCase {
         XCTAssertTrue(env.contains { $0.hasPrefix("PATH=") })
     }
 }
+
+/// Pure due-now logic of the retry engine (the engine itself reads and writes the real state file).
+final class RetryDueTests: XCTestCase {
+    let now = Date(timeIntervalSince1970: 1_790_600_000)
+
+    func item(_ status: RetryItem.Status = .waiting, resetsIn: TimeInterval = 3600, attempts: Int = 0) -> RetryItem {
+        RetryItem(sessionId: "local_1", cliSessionId: nil, profileId: "p", title: "t", cwd: "/", failedAt: now.addingTimeInterval(-600),
+                  resetsAt: now.addingTimeInterval(resetsIn), status: status, attempts: attempts,
+                  lastAttemptAt: nil, lastMode: nil, note: nil)
+    }
+
+    func testMovedItemDropsOldAccountReset() {
+        // Free new account: due once the retry delay has passed since the failure.
+        let moved = RetryEngine.rehomed(item(resetsIn: 3 * 3600), to: "q", limitedUntil: nil)
+        XCTAssertEqual(moved.profileId, "q")
+        XCTAssertEqual(moved.resetsAt, moved.failedAt)
+        XCTAssertTrue(RetryEngine.isDue(moved, limitedUntil: nil, retryDelay: 60, now: now))
+        // Limited new account: waits for that account's reset instead.
+        let until = now.addingTimeInterval(1800)
+        XCTAssertEqual(RetryEngine.rehomed(item(resetsIn: 3 * 3600), to: "q", limitedUntil: until).resetsAt, until)
+        // "Retry now" stays forced; finished items keep their history.
+        var forced = item(); _ = RetryEngine.forceDue(&forced)
+        XCTAssertEqual(RetryEngine.rehomed(forced, to: "q", limitedUntil: until).resetsAt, RetryEngine.forcedAt)
+        let done = item(.done)
+        XCTAssertEqual(RetryEngine.rehomed(done, to: "q", limitedUntil: nil).resetsAt, done.resetsAt)
+    }
+
+    func testWaitsForResetAndDelay() {
+        XCTAssertFalse(RetryEngine.isDue(item(resetsIn: 3600), limitedUntil: nil, retryDelay: 60, now: now))
+        XCTAssertFalse(RetryEngine.isDue(item(resetsIn: -30), limitedUntil: nil, retryDelay: 60, now: now))
+        XCTAssertTrue(RetryEngine.isDue(item(resetsIn: -90), limitedUntil: nil, retryDelay: 60, now: now))
+        // Past its own reset but the account is still limited.
+        XCTAssertFalse(RetryEngine.isDue(item(resetsIn: -90), limitedUntil: now.addingTimeInterval(600), retryDelay: 60, now: now))
+        XCTAssertTrue(RetryEngine.isDue(item(resetsIn: -90), limitedUntil: now.addingTimeInterval(-1), retryDelay: 60, now: now))
+    }
+
+    func testForcedWaitingItemIsDueWhileLimited() {
+        var it = item(resetsIn: 3600, attempts: 1)
+        XCTAssertTrue(RetryEngine.forceDue(&it))
+        XCTAssertEqual(it.status, .waiting)
+        XCTAssertEqual(it.attempts, 1)
+        XCTAssertTrue(RetryEngine.isDue(it, limitedUntil: now.addingTimeInterval(3600), retryDelay: 60, now: now))
+        XCTAssertTrue(RetryEngine.isDue(it, limitedUntil: .distantFuture, retryDelay: 60, now: now))
+    }
+
+    func testFailedItemStartsOver() {
+        var it = item(.failed, resetsIn: -7200, attempts: 3)
+        XCTAssertFalse(RetryEngine.isDue(it, limitedUntil: nil, retryDelay: 60, now: now))
+        XCTAssertTrue(RetryEngine.forceDue(&it))
+        XCTAssertEqual(it.status, .waiting)
+        XCTAssertEqual(it.attempts, 0)
+        XCTAssertTrue(RetryEngine.isDue(it, limitedUntil: now.addingTimeInterval(3600), retryDelay: 60, now: now))
+    }
+
+    func testInFlightAndFinishedItemsCantBeForced() {
+        for s in [RetryItem.Status.running, .verifying, .done, .resolved] {
+            var it = item(s)
+            XCTAssertFalse(RetryEngine.forceDue(&it), s.rawValue)
+            XCTAssertEqual(it, item(s))
+            XCTAssertFalse(RetryEngine.isDue(it, limitedUntil: nil, retryDelay: 0, now: now.addingTimeInterval(7200)))
+        }
+    }
+
+    func testOwnPromptIsNotAManualContinue() {
+        var it = item()
+        var tail = TranscriptTail(last: .userPrompt, lastAt: now)
+        XCTAssertTrue(RetryEngine.continuedManually(it, tail: tail))       // never sent: the user typed it
+        it.lastAttemptAt = now.addingTimeInterval(-5)
+        XCTAssertFalse(RetryEngine.continuedManually(it, tail: tail))      // probably our "continue"
+        tail.last = .assistantDone
+        XCTAssertTrue(RetryEngine.continuedManually(it, tail: tail))
+        tail.last = .rateLimited
+        XCTAssertFalse(RetryEngine.continuedManually(it, tail: tail))
+    }
+}
+
+/// Requests forwarded to the retry engine owner through the retry-request file.
+final class RetryRequestTests: XCTestCase {
+    func testParsesOldSingleValueFiles() {
+        XCTAssertEqual(RetryRequest.parse(""), [])     // mid-write: nothing, not "all"
+        XCTAssertEqual(RetryRequest.parse("*"), [.all])
+        XCTAssertEqual(RetryRequest.parse("work"), [.profile("work")])
+        XCTAssertEqual(RetryRequest.parse("item:local_1"), [.item("local_1")])
+        XCTAssertEqual(RetryRequest.parse("  item:local_1 \n"), [.item("local_1")])
+    }
+
+    func testParsesOneRequestPerLine() {
+        XCTAssertEqual(RetryRequest.parse("item:a\nwork\n\n*\ndismiss:a@1\n"),
+                       [.item("a"), .profile("work"), .all, .dismiss("a@1")])
+    }
+
+    func testLineRoundTrips() {
+        for r in [RetryRequest.all, .profile("p"), .item("local_1@17"), .dismiss("local_1@17")] {
+            XCTAssertEqual(RetryRequest.parse(r.line), [r])
+        }
+    }
+
+    func testAppendedRequestsAreAllTakenOnce() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("retry-request")
+        XCTAssertEqual(RetryRequest.take(from: url), [])
+        RetryRequest.append(.item("a"), to: url)
+        RetryRequest.append(.item("b"), to: url)
+        RetryRequest.append(.profile("work"), to: url)
+        XCTAssertEqual(RetryRequest.take(from: url), [.item("a"), .item("b"), .profile("work")])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), [])
+        XCTAssertEqual(RetryRequest.take(from: url), [])
+        // A file written by an older binary (atomic write, no newline).
+        try "item:c".write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertEqual(RetryRequest.take(from: url), [.item("c")])
+    }
+}
+
+/// Picking, sending and budgeting of queued retries.
+final class RetrySendTests: XCTestCase {
+    let now = Date(timeIntervalSince1970: 1_790_600_000)
+
+    func item(_ sid: String, resetsIn: TimeInterval = -3600, attempts: Int = 0) -> RetryItem {
+        RetryItem(sessionId: sid, cliSessionId: nil, profileId: "p", title: sid, cwd: "/", failedAt: now.addingTimeInterval(-7200),
+                  resetsAt: now.addingTimeInterval(resetsIn), status: .waiting, attempts: attempts,
+                  lastAttemptAt: nil, lastMode: nil, note: nil)
+    }
+
+    func testMissingChatDoesNotBlockTheQueue() {
+        var a = item("gone"); _ = RetryEngine.forceDue(&a)
+        let items = [a, item("later", resetsIn: 3600), item("ok")]
+        let pick = RetryEngine.pickDue(items, isDue: { $0.status == .waiting && ($0.resetsAt ?? now) <= now },
+                                       hasChat: { $0.sessionId != "gone" })
+        XCTAssertEqual(pick.missing, [0])
+        XCTAssertEqual(pick.send, 2)
+    }
+
+    func testNothingDue() {
+        let pick = RetryEngine.pickDue([item("a", resetsIn: 3600)], isDue: { _ in false }, hasChat: { _ in true })
+        XCTAssertEqual(pick.missing, [])
+        XCTAssertNil(pick.send)
+    }
+
+    func testManualSendsDontUseTheAttemptBudget() {
+        let max = 3
+        var it = item("a", resetsIn: 3600)
+        for _ in 0..<5 {
+            _ = RetryEngine.forceDue(&it)
+            RetryEngine.beginSend(&it, mode: .ui, now: now)
+            XCTAssertEqual(it.attempts, 0)
+            XCTAssertFalse(RetryEngine.outOfAttempts(it, max: max))
+            it.status = .waiting
+            it.resetsAt = now.addingTimeInterval(600)   // back to waiting for the reset
+        }
+        // After the reset it still gets all its automatic attempts.
+        for n in 1...max {
+            RetryEngine.beginSend(&it, mode: .ui, now: now)
+            XCTAssertEqual(it.attempts, n)
+            XCTAssertEqual(RetryEngine.outOfAttempts(it, max: max), n == max)
+            it.status = .waiting
+        }
+    }
+
+    func testManualSendAtFullBudgetDoesNotGiveUp() {
+        var it = item("a", attempts: 3)
+        _ = RetryEngine.forceDue(&it)
+        RetryEngine.beginSend(&it, mode: .cli, now: now)
+        XCTAssertEqual(it.attempts, 3)
+        XCTAssertFalse(RetryEngine.outOfAttempts(it, max: 3))
+        XCTAssertEqual(it.status, .verifying)
+        XCTAssertEqual(it.lastMode, .cli)
+        XCTAssertEqual(it.lastAttemptAt, now)
+    }
+
+    func testRetryNowWithModeOffSendsViaUIOnce() {
+        var it = item("a", resetsIn: 3600)
+        XCTAssertNil(RetryEngine.sendMode(for: it, configured: .off))     // automatic: leave it to the user
+        XCTAssertEqual(RetryEngine.sendMode(for: it, configured: .cli), .cli)
+        _ = RetryEngine.forceDue(&it)
+        XCTAssertEqual(RetryEngine.sendMode(for: it, configured: .off), .ui)
+        XCTAssertEqual(RetryEngine.sendMode(for: it, configured: .cli), .cli)
+    }
+}
+
+/// Limit hits of a chat moved between accounts count for the account they happened on.
+final class MovedHitTests: XCTestCase {
+    let t0 = Date(timeIntervalSince1970: 1_790_600_000)
+
+    func loc(_ p: String, _ acct: String) -> ChatLocation { ChatLocation(profileId: p, accountUuid: acct, orgUuid: "o") }
+
+    func move(_ id: String, _ from: ChatLocation, _ to: ChatLocation, at: TimeInterval,
+              status: PendingMove.Status = .done, undoOf: String? = nil) -> PendingMove {
+        PendingMove(id: id, sessionId: "local_1", title: "t", from: from, to: to, createdAt: t0,
+                    status: status, finishedAt: status == .pending ? nil : t0.addingTimeInterval(at),
+                    note: nil, backupDir: nil, undoOf: undoOf)
+    }
+
+    func hit(at: TimeInterval) -> RateLimitHit {
+        RateLimitHit(at: t0.addingTimeInterval(at), resetsAt: t0.addingTimeInterval(at + 3600), kind: .fiveHour, text: "limit")
+    }
+
+    func testHitBeforeMoveDoesNotCountForNewAccount() {
+        let a = loc("p1", "A"), b = loc("p2", "B")
+        let arr = Monitor.arrivals([move("m1", a, b, at: 100)])
+        XCTAssertNil(Monitor.accountHit(hit(at: 50), sessionId: "local_1", members: ["p2"], arrivals: arr))
+        XCTAssertNotNil(Monitor.accountHit(hit(at: 150), sessionId: "local_1", members: ["p2"], arrivals: arr))
+        XCTAssertNotNil(Monitor.accountHit(hit(at: 50), sessionId: "local_2", members: ["p2"], arrivals: arr))
+    }
+
+    func testOnlyFinishedCrossAccountMovesCount() {
+        let a = loc("p1", "A"), a2 = loc("p3", "A"), b = loc("p2", "B")
+        XCTAssertTrue(Monitor.arrivals([move("m1", a, a2, at: 100)]).isEmpty)
+        XCTAssertTrue(Monitor.arrivals([move("m1", a, b, at: 100, status: .pending)]).isEmpty)
+        XCTAssertTrue(Monitor.arrivals([move("m1", a, b, at: 100, status: .failed)]).isEmpty)
+        // Latest arrival wins: A -> B at 100, B -> A at 200.
+        let arr = Monitor.arrivals([move("m2", b, a, at: 200), move("m1", a, b, at: 100)])
+        XCTAssertEqual(arr["local_1"]?.profileId, "p1")
+        XCTAssertNil(Monitor.accountHit(hit(at: 150), sessionId: "local_1", members: ["p1"], arrivals: arr))
+    }
+
+    func testUndoneMoveKeepsHitsOnOriginalAccount() {
+        let a = loc("p1", "A"), b = loc("p2", "B")
+        let arr = Monitor.arrivals([move("m1", a, b, at: 100, status: .undone), move("m2", b, a, at: 200, undoOf: "m1")])
+        XCTAssertNotNil(Monitor.accountHit(hit(at: 50), sessionId: "local_1", members: ["p1"], arrivals: arr))
+    }
+}

@@ -79,6 +79,28 @@ func activityLabel(_ a: SessionStatus.Activity) -> String {
 
 // MARK: - Rendering
 
+func queueIsActive(_ it: RetryItem) -> Bool { [.waiting, .running, .verifying].contains(it.status) }
+
+/// Active items plus the last few finished ones, one line each. `name` labels items outside an account.
+func queueLines(_ items: [RetryItem], recentCount: Int, width w: Int, now: Date,
+                name: ((RetryItem) -> String)? = nil) -> [String] {
+    var out: [String] = []
+    for it in items.filter(queueIsActive) {
+        var when = ""
+        if it.status == .waiting, let r = it.resetsAt { when = r > now ? "in " + Fmt.duration(r.timeIntervalSince(now)) : "due" }
+        else if it.status == .verifying { when = "checking reply…" }
+        let label = name.map { A.pad(A.trunc($0(it), 16), 17) } ?? ""
+        out.append("  " + A.clay("⟳") + " " + label + A.trunc(it.title, max(10, w - 44))
+                   + "  " + A.dim(when) + (it.note.map { A.dim(" · " + $0) } ?? ""))
+    }
+    for it in items.filter({ !queueIsActive($0) }).suffix(recentCount) {
+        let mark = it.status == .done ? A.green("✓") : it.status == .failed ? A.red("✗") : A.dim("–")
+        let label = name.map { A.pad(A.trunc($0(it), 16), 17) } ?? ""
+        out.append("  " + mark + " " + A.dim(label + A.trunc(it.title, max(10, w - 30)) + (it.note.map { " · " + $0 } ?? "")))
+    }
+    return out
+}
+
 func render(_ snap: Snapshot, width: Int, detailed: Bool = true) -> String {
     let now = Date()
     var out: [String] = []
@@ -122,25 +144,20 @@ func render(_ snap: Snapshot, width: Int, detailed: Bool = true) -> String {
                 out.append("      " + A.dim(A.trunc(hit.text, w - 10)))
             }
         }
+        let queued = queueLines(snap.queue.filter { a.memberProfileIds.contains($0.profileId) },
+                                recentCount: 2, width: w, now: now)
+        if !queued.isEmpty { out.append("  " + A.dim("retry queue")); out += queued }
         out.append("")
     }
 
-    let active = snap.queue.filter { [.waiting, .running, .verifying].contains($0.status) }
-    let recent = snap.queue.filter { ![.waiting, .running, .verifying].contains($0.status) }.suffix(3)
-    if !active.isEmpty || !recent.isEmpty {
-        out.append(A.bold("Retry queue"))
-        for it in active {
-            let name = snap.accounts.first { $0.id == it.profileId }?.profile.name ?? it.profileId
-            var when = ""
-            if it.status == .waiting, let r = it.resetsAt, r > .distantPast { when = r > now ? "in " + Fmt.duration(r.timeIntervalSince(now)) : "due" }
-            else if it.status == .verifying { when = "checking reply…" }
-            out.append("  " + A.clay("⟳") + " " + A.pad(A.trunc(name, 16), 17) + A.trunc(it.title, max(10, w - 44))
-                       + "  " + A.dim(when) + (it.note.map { A.dim(" · " + $0) } ?? ""))
-        }
-        for it in recent {
-            let mark = it.status == .done ? A.green("✓") : it.status == .failed ? A.red("✗") : A.dim("–")
-            out.append("  " + mark + " " + A.dim(A.trunc(it.title, max(10, w - 30)) + (it.note.map { " · " + $0 } ?? "")))
-        }
+    // Items whose profile isn't under any account, so nothing disappears.
+    let other = snap.queue.filter { it in !snap.accounts.contains { $0.memberProfileIds.contains(it.profileId) } }
+    let lines = queueLines(other, recentCount: 3, width: w, now: now) { it in
+        snap.profiles.first { $0.id == it.profileId }?.name ?? it.profileId
+    }
+    if !lines.isEmpty {
+        out.append(A.bold("Retry queue") + A.dim(" · other profiles"))
+        out += lines
         out.append("")
     }
     return out.joined(separator: "\n")
@@ -157,14 +174,16 @@ func usage() -> Never {
       claude-watch                     live dashboard (q quit, r refresh, R retry due chats now)
       claude-watch status [--json]     one-shot snapshot
       claude-watch queue [--stats]     retry queue, or UI-vs-CLI success stats
-      claude-watch retry [profile]     retry waiting chats now (all or one profile)
+      claude-watch retry [profile]     retry waiting chats now (all or one profile), even if still limited
+      claude-watch retry --item <chat> retry one queued chat now (session id local_…, see `queue`);
+                                       also restarts a chat that gave up
       claude-watch probe [profile]     dry-run the UI retry path (opens a chat, types nothing)
       claude-watch mode <profile> <ui|cli|off>
       claude-watch set-token <profile> store a `claude setup-token` token for CLI retries
       claude-watch profiles            list discovered profiles
-      claude-watch move <chat> --to <profile>[:<org>] [--from <profile>] [--now]
+      claude-watch move <chat> --to <profile>[:<org>] [--from <profile>] [--now [--force]]
                                        move a chat (id or title words) to another window
-      claude-watch moves [--undo <id> | --cancel <id>]
+      claude-watch moves [--undo <id> [--now] | --cancel <id> | --now]
       claude-watch set-apns-key <AuthKey.p8> --key-id <id> --team-id <id> [--topic <bundle id>]
                                        enable iPhone push notifications (key from developer.apple.com)
       claude-watch probe-prompt <chat> dry-run answering a prompt: lists the window's buttons, presses nothing
@@ -174,17 +193,33 @@ func usage() -> Never {
     exit(0)
 }
 
-func requestRetry(_ profile: String?) {
-    let url = Paths.support.appendingPathComponent("retry-request")
-    try? (profile ?? "*").write(to: url, atomically: true, encoding: .utf8)
-}
-
 func notify(_ title: String, _ body: String) {
     let esc: (String) -> String = { $0.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") }
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
     p.arguments = ["-e", "display notification \"\(esc(body))\" with title \"\(esc(title))\""]
     try? p.run()
+}
+
+/// Quits the windows of these moves, runs them, reopens the windows, and prints the outcome.
+func restartAndRun(_ moves: [PendingMove]) {
+    let monitor = Monitor(ownEngine: false)
+    let snap = monitor.pollOnce()
+    let windows = Set(moves.flatMap { [$0.from.profileId, $0.to.profileId] })
+    let busy = snap.accounts.flatMap(\.sessions).filter { windows.contains($0.info.profileId) && $0.activity == .working }
+    if !busy.isEmpty && !args.contains("--force") {
+        print(A.yellow("Not restarting: \(busy.count) chat\(busy.count == 1 ? " is" : "s are") still working:"))
+        for s in busy.prefix(5) { print("  " + A.clay("▸") + " " + s.info.title) }
+        print(A.dim("The move stays queued and runs once both windows are closed. Add --force to quit them anyway."))
+        return
+    }
+    print("Restarting \(Set(moves.flatMap { [$0.from.profileName, $0.to.profileName] }).sorted().joined(separator: " and "))…")
+    let r = monitor.restartAndRunMoves(only: Set(moves.map(\.id)))
+    for s in r.stuck { print(A.yellow("\(s.name) didn't quit; the move runs once it's closed.")) }
+    for w in r.waiting { print(A.yellow(w.waitingMessage)) }
+    for f in r.finished {
+        print(f.status == .done ? A.green("✓ moved “\(f.title)”") : A.red("✗ \(f.title): \(f.note ?? f.status.rawValue)"))
+    }
 }
 
 func describe(_ e: WatchEvent) -> (String, String) {
@@ -242,7 +277,8 @@ case "queue":
         if snap.queue.isEmpty { print(A.dim("Queue is empty.")) }
         for it in snap.queue {
             print("\(A.pad(it.status.rawValue, 10)) \(A.pad(it.profileId, 11)) \(A.trunc(it.title, 50))"
-                  + A.dim(it.resetsAt.map { " · resets " + Fmt.time($0) } ?? "") + A.dim(it.note.map { " · " + $0 } ?? ""))
+                  + A.dim(it.resetsAt.flatMap { $0 > .distantPast ? " · resets " + Fmt.time($0) : " · due now" } ?? "")
+                  + A.dim(it.note.map { " · " + $0 } ?? "") + A.dim("  " + it.sessionId))
         }
     }
 
@@ -256,8 +292,18 @@ case "probe":
     print(UIRetry.probe(session: s, profile: p))
 
 case "retry":
-    requestRetry(args.dropFirst().first)
-    print("Requested. The retry engine will pick it up on its next poll.")
+    if let i = args.firstIndex(of: "--item") {
+        guard i + 1 < args.count, !args[i + 1].isEmpty else { usage() }
+        let key = args[i + 1]
+        let q = Monitor(ownEngine: false).engine.items
+        guard let it = q.last(where: { ($0.sessionId == key || $0.id == key) && [.waiting, .failed].contains($0.status) })
+        else { print("No waiting or failed chat \(key) in the queue (see `claude-watch queue`)."); exit(1) }
+        RetryRequest.append(.item(it.sessionId))
+        print("Requested a retry of “\(it.title)”. The retry engine will pick it up on its next poll.")
+    } else {
+        RetryRequest.append(args.dropFirst().first.map { .profile($0) } ?? .all)
+        print("Requested. The retry engine will pick it up on its next poll.")
+    }
 
 case "mode":
     guard args.count == 3, let mode = RetryMode(rawValue: args[2]) else { usage() }
@@ -339,18 +385,12 @@ case "move":
         exit(1)
     }
     guard let m = MoveStore().add(sessionId: chat.id, title: chat.title, from: chat.location, to: dests[0]) else {
-        print("That chat already has a pending move (see `claude-watch moves`)."); exit(1)
+        print("Couldn't queue it: the chat already has a pending move (see `claude-watch moves`), or moves.json couldn't be saved.")
+        exit(1)
     }
     print("Queued \(m.id): “\(chat.title)”  \(chat.location.label) → \(dests[0].label)")
     if args.contains("--now") {
-        let monitor = Monitor(ownEngine: false)
-        _ = monitor.pollOnce()
-        print("Restarting \(Set([m.from.profileName, m.to.profileName]).sorted().joined(separator: " and "))…")
-        let r = monitor.restartAndRunMoves()
-        for s in r.stuck { print(A.yellow("\(s.name) didn't quit; the move runs once it's closed.")) }
-        for f in r.finished {
-            print(f.status == .done ? A.green("✓ moved “\(f.title)”") : A.red("✗ \(f.title): \(f.note ?? f.status.rawValue)"))
-        }
+        restartAndRun([m])
     } else {
         print(A.dim("It runs once both windows are closed (the Claude Watch app does it). Add --now to restart them now."))
     }
@@ -358,11 +398,15 @@ case "move":
 case "moves":
     let store = MoveStore()
     if let i = args.firstIndex(of: "--undo"), i + 1 < args.count {
-        guard let m = store.undo(moveId: args[i + 1]) else { print("No finished move \(args[i + 1])."); exit(1) }
-        print("Queued undo \(m.id): “\(m.title)”  \(m.from.label) → \(m.to.label). Runs once both windows are closed.")
+        guard let m = store.undo(moveId: args[i + 1]) else { print("No finished move \(args[i + 1]), or it couldn't be queued."); exit(1) }
+        print("Queued undo \(m.id): “\(m.title)”  \(m.from.label) → \(m.to.label).")
+        if args.contains("--now") { restartAndRun([m]) } else { print(A.dim("Runs once both windows are closed. Add --now to restart them now.")) }
     } else if let i = args.firstIndex(of: "--cancel"), i + 1 < args.count {
         store.cancel(id: args[i + 1])
         print("Cancelled \(args[i + 1]).")
+    } else if args.contains("--now") {
+        let pending = store.pending
+        if pending.isEmpty { print(A.dim("No pending moves.")) } else { restartAndRun(pending) }
     } else {
         let all = store.all()
         if all.isEmpty { print(A.dim("No moves yet.")) }
@@ -414,7 +458,7 @@ case nil, "watch":
             switch c {
             case UInt8(ascii: "q"): break loop
             case UInt8(ascii: "r"): monitor.refreshNow()
-            case UInt8(ascii: "R"): requestRetry(nil); monitor.refreshNow()
+            case UInt8(ascii: "R"): RetryRequest.append(.all); monitor.refreshNow()
             default: break
             }
         }

@@ -118,23 +118,31 @@ public final class Monitor {
 
     public func cancelMove(_ id: String) { moves.cancel(id: id); refreshNow() }
 
-    /// Quits the windows involved in pending moves, runs the moves, and reopens those windows
-    /// plus each destination. Blocking; call it off the main thread and never from `perform`.
-    public func restartAndRunMoves() -> (stuck: [Profile], finished: [PendingMove]) {
-        let (pending, profs) = queue.sync { (moves.pending, profiles) }
+    /// Quits the windows of the confirmed moves (`only moveIds`), runs those moves, and reopens
+    /// the windows that quit plus each destination. Other pending moves are left to `poll`.
+    /// `waiting` lists confirmed moves still pending afterwards (a window didn't quit, or the
+    /// chat's CLI process is still alive). Blocking; call it off the main thread and never from `perform`.
+    public func restartAndRunMoves(only moveIds: Set<String>)
+        -> (stuck: [Profile], finished: [PendingMove], waiting: [PendingMove]) {
+        let (pending, profs) = queue.sync { (moves.pending.filter { moveIds.contains($0.id) }, profiles) }
+        guard !pending.isEmpty else { return ([], [], []) }
         let ids = Set(pending.flatMap { [$0.from.profileId, $0.to.profileId] })
         let (quit, stuck) = WindowControl.quit(profs.filter { ids.contains($0.id) })
-        let finished = queue.sync { runDueMoves(instances: ClaudeProcesses.list(), runners: Runners.list(), now: Date()) }
+        let (finished, waiting) = queue.sync {
+            (runDueMoves(instances: ClaudeProcesses.list(), runners: Runners.list(), now: Date(), only: moveIds),
+             moves.pending.filter { moveIds.contains($0.id) })
+        }
         WindowControl.relaunch(profs.filter { p in quit.contains(p) || pending.contains { $0.to.profileId == p.id } })
         refreshNow()
-        return (stuck, finished)
+        return (stuck, finished, waiting)
     }
 
-    private func runDueMoves(instances: [ClaudeProcesses.Instance], runners: [Runner], now: Date) -> [PendingMove] {
+    private func runDueMoves(instances: [ClaudeProcesses.Instance], runners: [Runner], now: Date,
+                             only: Set<String>? = nil) -> [PendingMove] {
         guard !moves.pending.isEmpty else { return [] }
         let running = Set(profiles.filter { ClaudeProcesses.pid(for: $0, in: instances) != nil }.map(\.id))
         let finished = moves.runDue(profiles: profiles, running: running,
-                                    liveSessions: Set(runners.map(\.sessionId)), now: now)
+                                    liveSessions: Set(runners.map(\.sessionId)), only: only, now: now)
         for m in finished {
             if m.status == .done { attribution.record(m.sessionId, profileId: m.to.profileId) }
             onEvent?(.moved(m))
@@ -230,6 +238,8 @@ public final class Monitor {
             else { groups.append((key, [p])) }
         }
 
+        let moveList = moves.all()
+        let arrivals = Self.arrivals(moveList)
         var accounts: [AccountStatus] = []
         var allStatuses: [SessionStatus] = []
         for g in groups {
@@ -242,7 +252,9 @@ public final class Monitor {
             // A limit error only counts while nothing on the account has succeeded since.
             let tails = accountSessions.map { scanner.tail(for: $0) }
             let lastSuccess = tails.compactMap(\.lastSuccessAt).max() ?? .distantPast
-            let allHits = tails.compactMap(\.lastRateLimit).filter { now.timeIntervalSince($0.at) < 8 * 86400 }
+            let allHits = zip(accountSessions, tails)
+                .compactMap { s, t in Self.accountHit(t.lastRateLimit, sessionId: s.id, members: memberIds, arrivals: arrivals) }
+                .filter { now.timeIntervalSince($0.at) < 8 * 86400 }
             let hits = allHits.filter { $0.at > lastSuccess }
             // Use whichever member window sampled usage most recently.
             let org = accountUuid?.split(separator: "/").last.map(String.init)
@@ -327,9 +339,32 @@ public final class Monitor {
 
         let snap = Snapshot(at: now, accounts: accounts, queue: engine.items,
                             engineOwner: engine.owner, scanning: false,
-                            moves: moves.all(), locations: locations, profiles: profiles, prompts: prompts)
+                            moves: moveList, locations: locations, profiles: profiles, prompts: prompts)
         snapshot = snap
         onSnapshot?(snap)
+    }
+
+    /// When each chat last landed in another account: the latest finished move per chat whose
+    /// source and destination are different accounts (or orgs). An undo only reverses a move,
+    /// so it isn't an arrival: the chat's hits from before the undone move stay where they were.
+    static func arrivals(_ moves: [PendingMove]) -> [String: (profileId: String, at: Date)] {
+        var out: [String: (profileId: String, at: Date)] = [:]
+        for m in moves where m.status == .done && m.undoOf == nil {
+            guard let at = m.finishedAt,
+                  m.from.accountUuid != m.to.accountUuid || m.from.orgUuid != m.to.orgUuid else { continue }
+            if let prev = out[m.sessionId], prev.at >= at { continue }
+            out[m.sessionId] = (m.to.profileId, at)
+        }
+        return out
+    }
+
+    /// A chat's last limit hit as it counts for the account made of `members`: a hit from before
+    /// the chat was moved into this account belongs to the old account and is dropped.
+    static func accountHit(_ hit: RateLimitHit?, sessionId: String, members: Set<String>,
+                           arrivals: [String: (profileId: String, at: Date)]) -> RateLimitHit? {
+        guard let hit else { return nil }
+        if let a = arrivals[sessionId], members.contains(a.profileId), hit.at < a.at { return nil }
+        return hit
     }
 
     /// Resolves compatibility symlinks (e.g. ~/Claude-Profiles/account-1 -> claude-3-…).

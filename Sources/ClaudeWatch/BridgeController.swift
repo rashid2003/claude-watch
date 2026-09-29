@@ -254,13 +254,12 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             return result(DesktopActions.newChat(profile: p, cwd: cwd, prompt: prompt))
 
         case .retry(let itemId):
-            guard let item = lock.withLock({ latest })?.queue.first(where: { $0.id == itemId }) else { return (.failed, "Not in the queue") }
-            // Per-item retry lands with the retry-engine work on feature/move-chat; until then retry the account's waiting chats.
-            monitor.perform { $0.engine.retryNow(profileId: item.profileId); $0.refreshNow() }
-            return (.done, "Retrying waiting chats of this account now")
+            guard lock.withLock({ latest })?.queue.contains(where: { $0.id == itemId }) == true else { return (.failed, "Not in the queue") }
+            monitor.perform { $0.engine.request(.item(itemId)); $0.refreshNow() }
+            return (.done, "Sending continue now")
 
         case .cancelRetry(let itemId):
-            monitor.perform { $0.engine.dismiss(itemId: itemId); $0.refreshNow() }
+            monitor.perform { $0.engine.request(.dismiss(itemId)); $0.refreshNow() }
             return (.done, nil)
 
         case .setMode(let pid, let mode):
@@ -288,7 +287,8 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             return (.done, nil)
 
         case .restartMoves:
-            let (stuck, finished) = monitor.restartAndRunMoves()
+            let ids = Set((lock.withLock { latest }?.moves ?? []).filter { $0.status == .pending }.map(\.id))
+            let (stuck, finished, _) = monitor.restartAndRunMoves(only: ids)
             if !stuck.isEmpty { return (.failed, "Couldn't quit: " + stuck.map(\.name).joined(separator: ", ")) }
             return (.done, "\(finished.filter { $0.status == .done }.count) moved")
         }

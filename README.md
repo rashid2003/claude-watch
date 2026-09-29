@@ -32,10 +32,29 @@ This builds `~/Applications/ClaudeWatch.app` (menu bar, no Dock icon) and
 claude-watch                  # live dashboard: q quit · r refresh · R retry due chats now
 claude-watch status [--json]  # one-shot
 claude-watch queue [--stats]  # retry queue / UI-vs-CLI success comparison
+claude-watch retry [profile]  # retry waiting chats now, even while the account is still limited
+claude-watch retry --item <session-id>  # retry one queued chat now (also restarts one that gave up)
 claude-watch mode <profile> ui|cli|off
 claude-watch probe [profile]  # dry-run of the UI path: opens a chat, types nothing
 claude-watch set-token <profile>
 claude-watch profiles
+claude-watch move "title words" --to 2 [--now]   # move a chat to window claude-2-… (see below)
+claude-watch moves [--undo <id> [--now] | --cancel <id> | --now]
+```
+
+## Moving chats
+
+Hover a chat in the popover and click ⇄, or open **All chats…** on an account, to move a chat to
+another window / org. Claude windows only read their chat list at start-up, so the move runs while
+both windows are closed: choose **Restart now** (Claude Watch quits them, moves the chat, reopens them)
+or **Later** (it runs the next time both are closed). Every move is backed up in
+`~/Library/Application Support/claude-watch/moves/` and can be undone from **Recent moves** or with
+`claude-watch moves --undo <id>`. Name orgs in the menus with `orgNames` in `config.json`.
+
+```bash
+claude-watch move "chat title words" --to 2          # window claude-2-…
+claude-watch move local_… --to 1:eb9c --now          # window 1, org eb9c…, restart now
+claude-watch moves                                   # pending + history
 ```
 
 ## Retry modes
