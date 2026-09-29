@@ -180,7 +180,7 @@ func usage() -> Never {
       claude-watch mode <profile> <ui|cli|off>
       claude-watch set-token <profile> store a `claude setup-token` token for CLI retries
       claude-watch profiles            list discovered profiles
-      claude-watch move <chat> --to <profile>[:<org>] [--from <profile>] [--now]
+      claude-watch move <chat> --to <profile>[:<org>] [--from <profile>] [--now [--force]]
                                        move a chat (id or title words) to another window
       claude-watch moves [--undo <id> [--now] | --cancel <id> | --now]
     """)
@@ -198,7 +198,15 @@ func notify(_ title: String, _ body: String) {
 /// Quits the windows of these moves, runs them, reopens the windows, and prints the outcome.
 func restartAndRun(_ moves: [PendingMove]) {
     let monitor = Monitor(ownEngine: false)
-    _ = monitor.pollOnce()
+    let snap = monitor.pollOnce()
+    let windows = Set(moves.flatMap { [$0.from.profileId, $0.to.profileId] })
+    let busy = snap.accounts.flatMap(\.sessions).filter { windows.contains($0.info.profileId) && $0.activity == .working }
+    if !busy.isEmpty && !args.contains("--force") {
+        print(A.yellow("Not restarting: \(busy.count) chat\(busy.count == 1 ? " is" : "s are") still working:"))
+        for s in busy.prefix(5) { print("  " + A.clay("▸") + " " + s.info.title) }
+        print(A.dim("The move stays queued and runs once both windows are closed. Add --force to quit them anyway."))
+        return
+    }
     print("Restarting \(Set(moves.flatMap { [$0.from.profileName, $0.to.profileName] }).sorted().joined(separator: " and "))…")
     let r = monitor.restartAndRunMoves(only: Set(moves.map(\.id)))
     for s in r.stuck { print(A.yellow("\(s.name) didn't quit; the move runs once it's closed.")) }
