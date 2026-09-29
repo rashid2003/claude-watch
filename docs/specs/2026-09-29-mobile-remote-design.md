@@ -345,6 +345,28 @@ iOS/ClaudeRemote.xcodeproj    iOS app, depends on WatchProtocol via local path
 3. Grant the existing Accessibility and Automation permissions to ClaudeWatch
    (already needed for UI retries).
 
+## As built (differences from above)
+
+- **M0 findings.** The desktop app doesn't write pending prompts anywhere it
+  can be read. A desktop prompt is detected from:
+  - an unanswered `tool_use` at the end of the transcript,
+  - a quiet transcript (≥ 4 s; longer for web and MCP tools, never for Agent),
+  - no child process of the chat's CLI started after the tool call.
+
+  AskUserQuestion and ExitPlanMode count right away. Allow / Deny press the
+  lowest matching button in the profile's window through Accessibility. New
+  chats use the `claude://code/new?folder=&q=` deep link sent to that
+  profile's process.
+- **Snapshots.** `snapshotPatch` isn't implemented. The server sends the full
+  snapshot when it changes, about 20–60 KB at most once per poll.
+  `prompt` events are folded into the snapshot's `prompts`.
+- **WebSocket client messages** are `{"type":"subscribe|unsubscribe|ping","chatId":…}`.
+- **Tailscale owner check** (`requireTailnetOwner`) is deferred. The listener
+  still accepts only tailnet and loopback peers, and every request needs a
+  paired token.
+- **Per-item Retry now** falls back to retrying the whole account until the
+  per-chat retry API from the move-chat branch lands.
+
 ## Out of scope for v1
 
 Android; iPad-specific layout; showing subagent transcripts; expanding tool

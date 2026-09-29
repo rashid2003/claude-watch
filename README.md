@@ -85,6 +85,64 @@ compares the two modes.
 
 Logs, queue state and the retry log are in the same folder.
 
+## iPhone remote (ClaudeRemote)
+
+`iOS/ClaudeRemote.xcodeproj` is an iPhone app that talks to a bridge inside
+ClaudeWatch.app. From the phone you can:
+
+- see every account's status, usage, forecast and retry queue;
+- read chats live and reply to them;
+- stop a working chat;
+- answer permission and question prompts;
+- start new chats;
+- retry now, cancel a retry, switch retry mode;
+- move chats.
+
+**Reaching the Mac.** The bridge listens on port 7433, but only on the Mac's
+[Tailscale](https://tailscale.com) addresses and `127.0.0.1`. Other peers are
+dropped before any HTTP is read. Install Tailscale on the Mac and on the iPhone,
+signed into the same tailnet, and the phone reaches the Mac from anywhere.
+
+**Pairing.**
+1. In the menu, click **iPhone…**. This shows a QR code and a 6-digit code.
+2. In ClaudeRemote, tap **Pair** and scan the QR code, or enter the host, port
+   and code by hand.
+
+The code works once, for 2 minutes, and five wrong tries close it. The phone
+gets a random token. The Mac stores only its SHA-256, in `devices.json`
+(mode 600). You can revoke devices in the same window. Every remote action is
+logged to `remote-log.jsonl`.
+
+**How commands run.**
+
+| Action | How |
+|---|---|
+| Reply | Headless `claude --resume <id> -p <text>` with that profile's CLI token (`claude-watch set-token <profile>`). Without a token, it's typed into the desktop window instead. Refused while the chat is working. |
+| Prompts in headless replies | They go to the phone through `--permission-prompt-tool` (the `claude-watch prompt-tool` MCP server). |
+| Prompts in the desktop window | Found from the transcript: an unanswered tool call with no new output. Answered by pressing the window's button through Accessibility. |
+| Stop | SIGINT to the headless run, or the window's Stop button, or Esc |
+| New chat | `claude://code/new?folder=…&q=…` sent to that profile's window |
+
+**Push notifications** (optional). Needed for prompts, finished or failed
+chats, and account events. In the Apple Developer portal, create the App ID
+`dev.lajward.ClaudeRemote` with Push Notifications and an APNs auth key (`.p8`),
+then run:
+
+```bash
+claude-watch set-apns-key AuthKey_XXXX.p8 --key-id XXXX --team-id YYYY
+```
+
+The key is kept in the Keychain. The Mac sends straight to Apple's push
+service; there is no other server.
+
+**Building the app.** Open `iOS/ClaudeRemote.xcodeproj`, then set your team
+under Signing & Capabilities and run it. In the Simulator, pair with
+`127.0.0.1` and port `7433`.
+
+Set `"bridgeEnabled": false` in the config to turn the bridge off. Two related
+settings are `"keepAwakeWhenPaired"` (keeps the Mac awake while a phone is
+paired) and `"keepAwakeOnlyOnAC"`.
+
 ## Development
 
 ```bash
@@ -94,3 +152,5 @@ swift run claude-watch status
 
 `Sources/WatchCore` holds the readers, forecaster and retry engine.
 `Sources/claude-watch` is the terminal UI and `Sources/ClaudeWatch` is the menu-bar app.
+`Sources/WatchProtocol` holds the wire types shared with the iPhone app, and
+`Sources/WatchBridge` is the HTTP/WebSocket bridge, pairing, prompt broker and push sender.
