@@ -16,6 +16,7 @@ struct AccountsView: View {
                             Divider()
                             AccountRowView(account: a, now: ctx.date)
                         }
+                        LiveActivitySection()
                         QueueSection(queue: snap.queue, now: ctx.date)
                         MovesSection(moves: snap.moves)
                         if !snap.engineOwner {

@@ -49,6 +49,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         case "error": store.toast = Toast(message: "Couldn't reach your Mac: the request timed out.", isError: true)
         default: break
         }
+        if demo("demoLive") != nil {   // shows the Live Activity with the fixtures, for screenshots
+            store.live.start()
+            store.live.update(Fixtures.snapshot, macName: "MacBook Pro")
+        }
         if let open = demo("demoOpen") {
             if open.hasPrefix("chat:") { store.deepLink = .chat(String(open.dropFirst(5))) }
             if open.hasPrefix("account:") { store.deepLink = .account(String(open.dropFirst(8))) }

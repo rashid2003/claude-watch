@@ -45,6 +45,10 @@
 	<string>The camera scans the pairing code shown on your Mac.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Face ID protects access to your Claude chats and confirms sensitive actions like allowing shell commands.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Session Watch connects to Session Watch on your Mac.</string>
 	<key>UIApplicationSceneManifest</key>

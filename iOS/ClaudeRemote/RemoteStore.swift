@@ -41,6 +41,9 @@ final class RemoteStore {
     var toast: Toast?
     var deepLink: DeepLink?
 
+    /// The Lock Screen Live Activity and the widgets.
+    let live = LiveActivities()
+
     @ObservationIgnored private var client: RemoteClient?
     @ObservationIgnored private var streamTask: Task<Void, Never>?
     @ObservationIgnored private var socket: StreamSocket?
@@ -59,6 +62,9 @@ final class RemoteStore {
         }
         // "try demo" was chosen last time and nothing has been paired since.
         if credentials == nil, UserDefaults.standard.bool(forKey: Self.demoModeKey) { enterDemo() }
+        live.register = { [weak self] r in await self?.register(r) ?? false }
+        if let credentials { live.paired(credentials) }
+        live.start()
     }
 
     /// For previews: a store that never touches the network, Keychain or disk.
@@ -174,6 +180,7 @@ final class RemoteStore {
         snapshot = nil
         lastUpdated = nil
         start()
+        live.paired(c)
         Task { await registerPushIfNeeded() }
     }
 
@@ -195,6 +202,7 @@ final class RemoteStore {
         Keychain.delete()
         SnapshotCache.clear()
         UserDefaults.standard.removeObject(forKey: Self.registeredTokenKey)
+        live.paired(nil)
         credentials = nil
         client = nil
         snapshot = nil
@@ -280,6 +288,7 @@ final class RemoteStore {
         case .snapshot(let s):
             snapshot = s
             lastUpdated = Date()
+            live.update(s, macName: credentials?.macName ?? "Mac")
             if Date().timeIntervalSince(lastCacheWrite) > 5 {
                 lastCacheWrite = Date()
                 let at = lastUpdated ?? Date()
@@ -460,6 +469,13 @@ final class RemoteStore {
     func didReceivePushToken(_ hex: String) {
         UserDefaults.standard.set(hex, forKey: Self.apnsTokenKey)
         Task { await registerPushIfNeeded() }
+    }
+
+    /// Sends a device registration (Live Activity tokens and the like) to the Mac.
+    func register(_ r: DeviceRegistration) async -> Bool {
+        guard let client, !isDemo, let s = try? await client.register(r) else { return false }
+        bridgeStatus = s
+        return true
     }
 
     /// Sends the APNs token to the Mac once per pairing (and again if it changes).

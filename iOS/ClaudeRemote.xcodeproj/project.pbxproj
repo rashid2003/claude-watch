@@ -7,14 +7,49 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0DE00000000000000000110 /* WatchProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE00000000000000000120 /* WatchProtocol */; };
+		C0DE00000000000000000111 /* SessionWatchWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000101 /* SessionWatchWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		C0DE00000000000000000010 /* WatchProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE00000000000000000020 /* WatchProtocol */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		C0DE00000000000000000150 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C0DE00000000000000000050 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C0DE00000000000000000130;
+			remoteInfo = SessionWatchWidgets;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		C0DE00000000000000000143 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				C0DE00000000000000000111 /* SessionWatchWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		C0DE00000000000000000101 /* SessionWatchWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SessionWatchWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C0DE00000000000000000001 /* ClaudeRemote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClaudeRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		C0DE00000000000000000104 /* Exceptions for "SessionWatchWidgets" folder in "SessionWatchWidgets" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				SessionWatchWidgets.entitlements,
+			);
+			target = C0DE00000000000000000130 /* SessionWatchWidgets */;
+		};
 		C0DE00000000000000000005 /* Exceptions for "ClaudeRemote" folder in "ClaudeRemote" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -26,6 +61,19 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		C0DE00000000000000000102 /* SessionWatchWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				C0DE00000000000000000104 /* Exceptions for "SessionWatchWidgets" folder in "SessionWatchWidgets" target */,
+			);
+			path = SessionWatchWidgets;
+			sourceTree = "<group>";
+		};
+		C0DE00000000000000000103 /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
 		C0DE00000000000000000002 /* ClaudeRemote */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -37,6 +85,14 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		C0DE00000000000000000140 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C0DE00000000000000000110 /* WatchProtocol in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C0DE00000000000000000040 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -52,6 +108,8 @@
 			isa = PBXGroup;
 			children = (
 				C0DE00000000000000000002 /* ClaudeRemote */,
+				C0DE00000000000000000103 /* Shared */,
+				C0DE00000000000000000102 /* SessionWatchWidgets */,
 				C0DE00000000000000000004 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -60,6 +118,7 @@
 			isa = PBXGroup;
 			children = (
 				C0DE00000000000000000001 /* ClaudeRemote.app */,
+				C0DE00000000000000000101 /* SessionWatchWidgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -67,6 +126,30 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		C0DE00000000000000000130 /* SessionWatchWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0DE00000000000000000160 /* Build configuration list for PBXNativeTarget "SessionWatchWidgets" */;
+			buildPhases = (
+				C0DE00000000000000000141 /* Sources */,
+				C0DE00000000000000000140 /* Frameworks */,
+				C0DE00000000000000000142 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				C0DE00000000000000000102 /* SessionWatchWidgets */,
+				C0DE00000000000000000103 /* Shared */,
+			);
+			name = SessionWatchWidgets;
+			packageProductDependencies = (
+				C0DE00000000000000000120 /* WatchProtocol */,
+			);
+			productName = SessionWatchWidgets;
+			productReference = C0DE00000000000000000101 /* SessionWatchWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		C0DE00000000000000000030 /* ClaudeRemote */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = C0DE00000000000000000060 /* Build configuration list for PBXNativeTarget "ClaudeRemote" */;
@@ -74,13 +157,16 @@
 				C0DE00000000000000000041 /* Sources */,
 				C0DE00000000000000000040 /* Frameworks */,
 				C0DE00000000000000000042 /* Resources */,
+				C0DE00000000000000000143 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				C0DE00000000000000000151 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				C0DE00000000000000000002 /* ClaudeRemote */,
+				C0DE00000000000000000103 /* Shared */,
 			);
 			name = ClaudeRemote;
 			packageProductDependencies = (
@@ -103,6 +189,9 @@
 					C0DE00000000000000000030 = {
 						CreatedOnToolsVersion = 16.0;
 					};
+					C0DE00000000000000000130 = {
+						CreatedOnToolsVersion = 16.0;
+					};
 				};
 			};
 			buildConfigurationList = C0DE00000000000000000061 /* Build configuration list for PBXProject "ClaudeRemote" */;
@@ -123,11 +212,19 @@
 			projectRoot = "";
 			targets = (
 				C0DE00000000000000000030 /* ClaudeRemote */,
+				C0DE00000000000000000130 /* SessionWatchWidgets */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		C0DE00000000000000000142 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C0DE00000000000000000042 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -138,6 +235,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		C0DE00000000000000000141 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C0DE00000000000000000041 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -147,7 +251,71 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		C0DE00000000000000000151 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C0DE00000000000000000130 /* SessionWatchWidgets */;
+			targetProxy = C0DE00000000000000000150 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		C0DE00000000000000000172 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = SessionWatchWidgets/SessionWatchWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6W5NJUTUCV;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SessionWatchWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.lajward.SessionWatch.Widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		C0DE00000000000000000173 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = SessionWatchWidgets/SessionWatchWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6W5NJUTUCV;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SessionWatchWidgets/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.lajward.SessionWatch.Widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 		C0DE00000000000000000070 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -326,6 +494,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		C0DE00000000000000000160 /* Build configuration list for PBXNativeTarget "SessionWatchWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0DE00000000000000000172 /* Debug */,
+				C0DE00000000000000000173 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		C0DE00000000000000000060 /* Build configuration list for PBXNativeTarget "ClaudeRemote" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -354,6 +531,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		C0DE00000000000000000120 /* WatchProtocol */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = WatchProtocol;
+		};
 		C0DE00000000000000000020 /* WatchProtocol */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = WatchProtocol;
