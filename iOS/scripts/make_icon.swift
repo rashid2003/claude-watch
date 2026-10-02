@@ -1,64 +1,96 @@
-// Draws the ClaudeRemote app icon: a clay eight-spoke teardrop asterisk (✻) on near-black, 1024×1024, no alpha.
-// Run from iOS/: swift scripts/make_icon.swift ClaudeRemote/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+// Draws the Session Watch "Gauge prompt" icon: two usage gauges (amber = Claude, teal = a second agent)
+// around a terminal prompt (›_), on a #16181d tile. Vector paths only, 1024×1024 PNG.
+//
+//   swift scripts/make_icon.swift ios <out.png>   full-bleed square, no alpha (iOS masks it)
+//   swift scripts/make_icon.swift mac <out.png>   macOS rounded tile, 824/1024 centred, transparent margin
+//
+// Geometry is authored on a 140×140 reference tile (y down) and scaled to the drawn tile.
 import CoreGraphics
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+let args = CommandLine.arguments
+guard args.count == 3, args[1] == "ios" || args[1] == "mac" else {
+    FileHandle.standardError.write("usage: make_icon.swift ios|mac <out.png>\n".data(using: .utf8)!)
+    exit(2)
+}
+let mac = args[1] == "mac"
+let out = args[2]
+
 let size = 1024
-let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "AppIcon.png"
+let s = CGFloat(size)
 let cs = CGColorSpace(name: CGColorSpace.sRGB)!
+let alpha: CGImageAlphaInfo = mac ? .premultipliedLast : .noneSkipLast
 let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0, space: cs,
-                    bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
-func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> CGColor { CGColor(colorSpace: cs, components: [r, g, b, a])! }
-let s = CGFloat(size), c = CGPoint(x: s / 2, y: s / 2)
+                    bitmapInfo: alpha.rawValue)!
 
-// Background: #121212 with a soft lift towards the top and a darker rim.
-ctx.setFillColor(rgb(0x12 / 255.0, 0x12 / 255.0, 0x12 / 255.0)); ctx.fill(CGRect(x: 0, y: 0, width: s, height: s))
-let bg = CGGradient(colorsSpace: cs, colors: [rgb(0.16, 0.15, 0.145), rgb(0.071, 0.071, 0.071), rgb(0.045, 0.045, 0.045)] as CFArray,
-                    locations: [0, 0.62, 1])!
-ctx.drawRadialGradient(bg, startCenter: CGPoint(x: c.x, y: s * 0.66), startRadius: 0,
-                       endCenter: CGPoint(x: c.x, y: s * 0.55), endRadius: s * 0.78, options: [.drawsAfterEndLocation])
-// A faint clay glow behind the glyph.
-let glow = CGGradient(colorsSpace: cs, colors: [rgb(0.851, 0.467, 0.341, 0.20), rgb(0.851, 0.467, 0.341, 0)] as CFArray,
-                      locations: [0, 1])!
-ctx.drawRadialGradient(glow, startCenter: c, startRadius: 0, endCenter: c, endRadius: s * 0.42, options: [])
+func hex(_ v: UInt32) -> CGColor {
+    CGColor(colorSpace: cs, components: [CGFloat((v >> 16) & 0xff) / 255, CGFloat((v >> 8) & 0xff) / 255,
+                                         CGFloat(v & 0xff) / 255, 1])!
+}
+let tileColor = hex(0x16181d), trackColor = hex(0x2a2e36)
+let amber = hex(0xf5a524), teal = hex(0x3fc1b0), ink = hex(0xf3f4f6)
 
-// The asterisk: eight teardrop spokes, narrow at the hub and rounded at the tip, around a round hub.
-func spoke(angle: CGFloat) -> CGPath {
-    let r0: CGFloat = 60, r1: CGFloat = 292     // hub end, centre of the tip cap
-    let w0: CGFloat = 24, w1: CGFloat = 50      // half widths
-    let p = CGMutablePath()
-    p.move(to: CGPoint(x: r0, y: -w0))
-    p.addCurve(to: CGPoint(x: r1, y: -w1), control1: CGPoint(x: r0 + 90, y: -w0 - 2), control2: CGPoint(x: r1 - 110, y: -w1))
-    p.addArc(center: CGPoint(x: r1, y: 0), radius: w1, startAngle: -.pi / 2, endAngle: .pi / 2, clockwise: false)
-    p.addCurve(to: CGPoint(x: r0, y: w0), control1: CGPoint(x: r1 - 110, y: w1), control2: CGPoint(x: r0 + 90, y: w0 + 2))
-    p.addArc(center: CGPoint(x: r0, y: 0), radius: w0, startAngle: .pi / 2, endAngle: 3 * .pi / 2, clockwise: false)
-    p.closeSubpath()
-    var t = CGAffineTransform(translationX: c.x, y: c.y).rotated(by: angle)
-    return p.copy(using: &t)!
+// The tile: full bleed on iOS; on macOS an 824pt rounded rect (22.4% radius) centred in the canvas.
+let tileSide: CGFloat = mac ? 824 : s
+let tileOrigin = (s - tileSide) / 2
+if mac {
+    ctx.clear(CGRect(x: 0, y: 0, width: s, height: s))
+    let rect = CGRect(x: tileOrigin, y: tileOrigin, width: tileSide, height: tileSide)
+    let r = tileSide * 0.224
+    ctx.addPath(CGPath(roundedRect: rect, cornerWidth: r, cornerHeight: r, transform: nil))
+    ctx.setFillColor(tileColor)
+    ctx.fillPath()
+} else {
+    ctx.setFillColor(tileColor)
+    ctx.fill(CGRect(x: 0, y: 0, width: s, height: s))
 }
 
-// One layer: solid shapes first, then the gradient and the highlight painted only where the shapes are,
-// so overlapping spokes never show seams. The shadow under the layer gives the glyph some lift.
-ctx.saveGState()
-ctx.setShadow(offset: CGSize(width: 0, height: -16), blur: 36, color: rgb(0, 0, 0, 0.65))
-ctx.beginTransparencyLayer(auxiliaryInfo: nil)
-ctx.setFillColor(rgb(1, 1, 1))
-for i in 0..<8 { ctx.addPath(spoke(angle: CGFloat(i) * .pi / 4 + .pi / 8)); ctx.fillPath() }
-ctx.fillEllipse(in: CGRect(x: c.x - 84, y: c.y - 84, width: 168, height: 168))
-ctx.setBlendMode(.sourceIn)
-let clay = CGGradient(colorsSpace: cs, colors: [rgb(0.93, 0.57, 0.44), rgb(0.851, 0.467, 0.341), rgb(0.72, 0.36, 0.25)] as CFArray,
-                      locations: [0, 0.5, 1])!
-ctx.drawLinearGradient(clay, start: CGPoint(x: c.x - 260, y: c.y + 320), end: CGPoint(x: c.x + 260, y: c.y - 320), options: [])
-ctx.setBlendMode(.sourceAtop)
-let sheen = CGGradient(colorsSpace: cs, colors: [rgb(1, 1, 1, 0.14), rgb(1, 1, 1, 0)] as CFArray, locations: [0, 1])!
-ctx.drawLinearGradient(sheen, start: CGPoint(x: c.x, y: c.y + 340), end: CGPoint(x: c.x, y: c.y), options: [])
-ctx.endTransparencyLayer()
-ctx.restoreGState()
+// Switch to reference space: 140×140, origin top-left, y down.
+let k = tileSide / 140
+ctx.translateBy(x: tileOrigin, y: tileOrigin + tileSide)
+ctx.scaleBy(x: k, y: -k)
+
+let centre = CGPoint(x: 70, y: 70)
+ctx.setLineCap(.round)
+ctx.setLineJoin(.round)
+
+func ring(radius: CGFloat, width: CGFloat) {
+    ctx.setStrokeColor(trackColor)
+    ctx.setLineWidth(width)
+    ctx.strokeEllipse(in: CGRect(x: centre.x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2))
+}
+
+// A gauge arc from 12 o'clock, clockwise on screen, to the given end point on the circle.
+// In y-down space angles grow clockwise, so the top is -90° and the sweep runs in increasing angle.
+func arc(radius: CGFloat, width: CGFloat, end: CGPoint, color: CGColor) {
+    let start = -CGFloat.pi / 2
+    var stop = atan2(end.y - centre.y, end.x - centre.x)
+    while stop <= start { stop += 2 * .pi }
+    let p = CGMutablePath()
+    p.addArc(center: centre, radius: radius, startAngle: start, endAngle: stop, clockwise: false)
+    ctx.addPath(p)
+    ctx.setStrokeColor(color)
+    ctx.setLineWidth(width)
+    ctx.strokePath()
+}
+
+ring(radius: 46, width: 9)
+arc(radius: 46, width: 9, end: CGPoint(x: 26.3, y: 84.2), color: amber)
+ring(radius: 32, width: 5)
+arc(radius: 32, width: 5, end: CGPoint(x: 100.4, y: 80), color: teal)
+
+// The prompt: chevron and underscore.
+ctx.setStrokeColor(ink)
+ctx.setLineWidth(5)
+ctx.addLines(between: [CGPoint(x: 56, y: 61), CGPoint(x: 65, y: 70), CGPoint(x: 56, y: 79)])
+ctx.strokePath()
+ctx.addLines(between: [CGPoint(x: 70, y: 80), CGPoint(x: 84, y: 80)])
+ctx.strokePath()
 
 let img = ctx.makeImage()!
 let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: out) as CFURL, UTType.png.identifier as CFString, 1, nil)!
 CGImageDestinationAddImage(dest, img, nil)
 precondition(CGImageDestinationFinalize(dest))
-print("wrote \(out)")
+print("wrote \(out) (\(args[1]))")

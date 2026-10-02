@@ -152,7 +152,7 @@ struct LockView: View {
                 .font(.system(size: 44, weight: .regular, design: .monospaced))
                 .foregroundStyle(Theme.clay)
                 .accessibilityHidden(true)
-            Text("claude-remote").font(Theme.monoTitle)
+            Text("session-watch").font(Theme.monoTitle)
             Text("locked · face id required").font(Theme.monoSmall).foregroundStyle(.secondary)
             Button("unlock") { Task { await lock.unlock() } }
                 .buttonStyle(.clay)

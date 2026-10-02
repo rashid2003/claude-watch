@@ -116,7 +116,7 @@ struct PairingView: View {
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 6) {
                         Text("✻").foregroundStyle(Theme.clay)
-                        Text("claude-remote")
+                        Text("session-watch")
                     }
                     .font(Theme.monoTitle)
                 }

@@ -3,7 +3,7 @@ import WatchProtocol
 
 // MARK: - Header
 
-/// Inline nav bar with "✻ claude-remote" as the title, and the Mac's connection dot plus a refresh glyph.
+/// Inline nav bar with "✻ session-watch" as the title, and the Mac's connection dot plus a refresh glyph.
 private struct RemoteHeader: ViewModifier {
     @Environment(RemoteStore.self) private var store
 
@@ -14,7 +14,7 @@ private struct RemoteHeader: ViewModifier {
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 6) {
                         Text("✻").foregroundStyle(Theme.clay)
-                        Text("claude-remote")
+                        Text("session-watch")
                         if store.isDemo {
                             Badge(text: "demo", color: Theme.clay, font: Theme.monoTiny.weight(.semibold))
                         }
