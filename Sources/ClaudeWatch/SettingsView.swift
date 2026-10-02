@@ -65,6 +65,10 @@ struct SettingsView: View {
                 Toggle("Enabled", isOn: bind(\.bridgeEnabled))
                 number("Port", bind(\.bridgePort, clamp: { min(65535, max(1024, $0)) }), unit: "", grouping: false)
                 Toggle("Require Tailscale owner", isOn: bind(\.requireTailnetOwner))
+                Toggle("Connect through relay", isOn: bind(\.relayEnabled))
+                if cfg.relayEnabled && cfg.bridgeEnabled {
+                    LabeledContent("Relay") { relayStatus }
+                }
                 Toggle("Keep awake when paired", isOn: bind(\.keepAwakeWhenPaired))
                 Toggle("Only on AC power", isOn: bind(\.keepAwakeOnlyOnAC))
                     .disabled(!cfg.keepAwakeWhenPaired)
@@ -76,7 +80,9 @@ struct SettingsView: View {
                     }
                 }
             } header: { header("iphone bridge") } footer: {
-                note("Only phones signed into this Mac's Tailscale account can connect when the owner check is on.")
+                note("Only phones signed into this Mac's Tailscale account can connect when the owner check is on. "
+                     + "The relay lets a paired iPhone reach this Mac without Tailscale; everything through it is "
+                     + "end-to-end encrypted with a key from the pairing QR. Pair again after turning it on.")
             }
 
             Section {
@@ -98,6 +104,16 @@ struct SettingsView: View {
         .onAppear { login.refresh(); model.trusted = UIRetry.isTrusted }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             login.refresh(); model.trusted = UIRetry.isTrusted
+        }
+    }
+
+    @ViewBuilder var relayStatus: some View {
+        let _ = model.bridgeTick   // redraw on relay status changes
+        switch model.bridge?.relayStatus ?? .off {
+        case .connected: Text("● connected").foregroundStyle(Theme.green)
+        case .connecting: Text("◐ connecting").foregroundStyle(Theme.yellow)
+        case .off: Text("○ off").foregroundStyle(.secondary)
+        case .failed(let why): Text("✗ \(why)").foregroundStyle(Theme.red).lineLimit(2)
         }
     }
 

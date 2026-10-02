@@ -53,7 +53,7 @@ These are stored in `~/Library/Application Support/claude-watch/relay.json` (060
    - `0x02 ‖ ephM.pub (32 bytes)`, where `ephM` is a fresh X25519 key.
 3. **Key derivation.** Both sides compute:
    - `ikm = DH(ephP, staticM) ‖ DH(ephP, ephM)`
-   - `k = HKDF-SHA256(ikm, salt: "session-watch relay v1", info: sid ‖ ephP.pub ‖ ephM.pub, 64 bytes)`
+   - `k = HKDF-SHA256(ikm, salt: "session-watch relay v1", info: ephP.pub ‖ ephM.pub ‖ staticM.pub, 64 bytes)`
    - The first 32 bytes are the phone→mac key; the last 32 are the mac→phone key.
 4. **Data frames:** `ChaCha20-Poly1305(seal)`, with the nonce being a 96-bit little-endian counter per direction, starting at 0. The frame is `combined` minus the nonce (ciphertext ‖ tag). The receiver tracks its own counter; any failure closes the stream.
 

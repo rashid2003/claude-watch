@@ -31,6 +31,9 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
 
     /// Refuses tailnet peers that aren't signed into this Mac's Tailscale account.
     let owner = TailnetOwner()
+    /// The relay connection, while Settings has it on.
+    private(set) var relay: RelayConnector?
+    private var relayError: String?
 
     init(monitor: Monitor) {
         self.monitor = monitor
@@ -68,6 +71,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         guard monitor.config.bridgeEnabled else { return }
         try? broker.start()
         server.start()
+        syncRelay()
         // Development: pair the Simulator without the menu (CLAUDE_WATCH_DEV_PAIR_CODE=123456).
         if let code = ProcessInfo.processInfo.environment["CLAUDE_WATCH_DEV_PAIR_CODE"], code.count == 6 {
             server.pairing.open(code: code, lifetime: 3600)
@@ -75,6 +79,8 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     }
 
     func stop() {
+        relay?.stop()
+        relay = nil
         server.stop()
         broker.stop()
         setKeepAwake(false)
@@ -89,6 +95,32 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         notifyTransitions(merged)
         driveLiveActivities(merged)
         evaluateKeepAwake()
+        syncRelay()
+    }
+
+    // MARK: Relay
+
+    var relayStatus: RelayConnector.Status { relay?.status ?? (relayError.map { .failed($0) } ?? .off) }
+
+    /// Follows the Settings toggle and address (checked on every snapshot, so edits apply within a poll).
+    private func syncRelay() {
+        let cfg = monitor.config
+        let want = cfg.bridgeEnabled && cfg.relayEnabled
+        if let r = relay, !want || r.url != cfg.relayURL {
+            r.stop()
+            relay = nil
+        }
+        guard want, relay == nil else { return }
+        do {
+            let r = try RelayConnector(url: cfg.relayURL, identity: RelayIdentity.loadOrCreate(at: Paths.relayIdentity),
+                                       localPort: server.port)
+            r.onStatus = { [weak self] _ in DispatchQueue.main.async { self?.onChange?() } }
+            relay = r
+            relayError = nil
+            r.start()
+        } catch {
+            relayError = "Relay identity: \(error.localizedDescription)"
+        }
     }
 
     private func republish() {
@@ -131,7 +163,11 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         if !UIRetry.isTrusted { w.append("Accessibility permission is missing on the Mac, so prompts can't be answered and new chats can't be started.") }
         if !pusher.isConfigured { w.append("Push notifications aren't set up on the Mac yet (claude-watch set-apns-key).") }
         if let e = pusher.lastError { w.append(e) }
-        if TailscaleAddresses.current().isEmpty { w.append("Tailscale isn't connected on the Mac; only this Mac can reach the bridge.") }
+        let relayUp = relayStatus == .connected
+        if TailscaleAddresses.current().isEmpty && !relayUp {
+            w.append("Tailscale isn't connected on the Mac and the relay is off; only this Mac can reach the bridge.")
+        }
+        if case .failed(let why) = relayStatus { w.append("Relay: \(why)") }
         if let e = server.lastError { w.append(e) }
         if monitor.config.requireTailnetOwner && owner.unavailable {
             w.append("The Tailscale CLI isn't available, so the bridge can't check that connecting devices are yours.")
@@ -408,7 +444,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         if let name = TailscaleAddresses.magicDNSName() { hosts.append(name) }
         hosts += TailscaleAddresses.current()
         hosts.append("127.0.0.1")
-        return PairingPayload(macName: server.macName, hosts: hosts, port: Int(server.port), code: code)
+        return PairingPayload(macName: server.macName, hosts: hosts, port: Int(server.port), code: code, relay: relay?.info)
     }
 
     private func evaluateKeepAwake() {

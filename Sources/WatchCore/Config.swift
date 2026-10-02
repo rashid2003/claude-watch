@@ -25,6 +25,8 @@ public enum Paths {
     public static var engineLock: URL { support.appendingPathComponent("engine.lock") }
     public static var devices: URL { support.appendingPathComponent("devices.json") }
     public static var remoteLog: URL { support.appendingPathComponent("remote-log.jsonl") }
+    /// This Mac's relay room and keys (0600).
+    public static var relayIdentity: URL { support.appendingPathComponent("relay.json") }
     /// Unix socket for headless approval requests (paths are limited to 104 bytes).
     public static var bridgeSocket: String { support.appendingPathComponent("bridge.sock").path }
     /// Retry requests for the engine owner, one per line (see `RetryRequest`).
@@ -69,6 +71,9 @@ public struct Config: Codable, Sendable, Equatable {
     public var keepAwakeOnlyOnAC: Bool = true
     /// Only accept phones signed into the same Tailscale account as this Mac (`tailscale whois`).
     public var requireTailnetOwner: Bool = true
+    /// Also reachable through the Session Watch relay, so phones need no Tailscale. End-to-end encrypted.
+    public var relayEnabled: Bool = true
+    public var relayURL: String = "wss://relay.sessionwatch.lajward.dev"
     /// Mac app appearance: the menu bar item and the Dock icon (at least one stays on).
     public var showInMenuBar: Bool = true
     public var showInDock: Bool = true
@@ -94,6 +99,8 @@ public struct Config: Codable, Sendable, Equatable {
         keepAwakeWhenPaired = try c.decodeIfPresent(Bool.self, forKey: .keepAwakeWhenPaired) ?? d.keepAwakeWhenPaired
         keepAwakeOnlyOnAC = try c.decodeIfPresent(Bool.self, forKey: .keepAwakeOnlyOnAC) ?? d.keepAwakeOnlyOnAC
         requireTailnetOwner = try c.decodeIfPresent(Bool.self, forKey: .requireTailnetOwner) ?? d.requireTailnetOwner
+        relayEnabled = try c.decodeIfPresent(Bool.self, forKey: .relayEnabled) ?? d.relayEnabled
+        relayURL = try c.decodeIfPresent(String.self, forKey: .relayURL) ?? d.relayURL
         showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .showInMenuBar) ?? d.showInMenuBar
         showInDock = try c.decodeIfPresent(Bool.self, forKey: .showInDock) ?? d.showInDock
     }
