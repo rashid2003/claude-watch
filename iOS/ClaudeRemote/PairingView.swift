@@ -142,17 +142,17 @@ struct PairingView: View {
         host = p.hosts.joined(separator: ", ")
         port = String(p.port)
         code = p.code
-        Task { await pair(hosts: p.hosts, port: p.port, code: p.code) }
+        Task { await pair(hosts: p.hosts, port: p.port, code: p.code, relay: p.relay) }
     }
 
-    private func pair(hosts: [String], port: Int, code: String) async {
+    private func pair(hosts: [String], port: Int, code: String, relay: RelayInfo? = nil) async {
         busy = true
         error = nil
         focus = nil
         defer { busy = false }
         do {
             let creds = try await RemoteClient.pair(hosts: hosts, port: port, code: code,
-                                                    deviceName: UIDevice.current.name)
+                                                    deviceName: UIDevice.current.name, relay: relay)
             store.didPair(creds)
         } catch {
             self.error = error.localizedDescription

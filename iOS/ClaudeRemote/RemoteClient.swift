@@ -23,8 +23,13 @@ enum RemoteError: LocalizedError, Equatable {
 /// REST + WebSocket access to the bridge. Tries the paired hosts in order and sticks to the first one
 /// that answers until a request to it fails at the transport level.
 actor RemoteClient {
+    enum Path: Sendable { case direct, relay }
+    private enum Candidate { case direct(URL), relay(RelayInfo) }
+
     private(set) var credentials: Credentials
     private var base: URL?
+    /// Which way the current base reaches the Mac.
+    private(set) var path: Path?
     private let session: URLSession
 
     init(credentials: Credentials) {
@@ -50,14 +55,26 @@ actor RemoteClient {
 
     /// Redeems a pairing code against the first host that answers. A wrong code stops at once (it counts
     /// against the Mac's attempt limit); only transport failures move on to the next host.
-    static func pair(hosts: [String], port: Int, code: String, deviceName: String) async throws -> Credentials {
+    static func pair(hosts: [String], port: Int, code: String, deviceName: String,
+                     relay: RelayInfo? = nil) async throws -> Credentials {
         let urls = hosts.compactMap { baseURL(host: $0.trimmingCharacters(in: .whitespaces), port: port) }
-        guard !urls.isEmpty else { throw RemoteError.unreachable("No address to try.") }
+        guard !urls.isEmpty || relay != nil else { throw RemoteError.unreachable("No address to try.") }
         let session = makeSession(timeout: 6)
         let body = try WireCoder.encoder.encode(PairRequest(code: code, deviceName: deviceName))
         var lastError: Error = RemoteError.unreachable("")
-        for (i, url) in urls.enumerated() {
+        // Direct hosts first, then (index == urls.count) the relay.
+        for i in 0..<(urls.count + (relay == nil ? 0 : 1)) {
+            let viaRelay = i == urls.count
+            let url: URL
+            if viaRelay, let relay {
+                do { url = try await RelayProxy.shared.baseURL(for: relay) } catch {
+                    lastError = RemoteError.unreachable(error.localizedDescription); continue
+                }
+            } else {
+                url = urls[i]
+            }
             var req = URLRequest(url: url.appending(path: "pair"))
+            if viaRelay { req.timeoutInterval = 15 }
             req.httpMethod = "POST"
             req.httpBody = body
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -65,12 +82,14 @@ actor RemoteClient {
                 let (data, resp) = try await session.data(for: req)
                 let r: PairResponse = try decode(data, resp)
                 var ordered = urls
-                ordered.insert(ordered.remove(at: i), at: 0)
-                return Credentials(baseURLs: ordered, token: r.token, deviceId: r.deviceId, macName: r.macName)
+                if !viaRelay { ordered.insert(ordered.remove(at: i), at: 0) }
+                return Credentials(baseURLs: ordered, token: r.token, deviceId: r.deviceId, macName: r.macName,
+                                   relay: relay, preferRelay: viaRelay ? true : nil)
             } catch let e as RemoteError {
                 throw e
             } catch {
-                lastError = RemoteError.unreachable(error.localizedDescription)
+                lastError = RemoteError.unreachable(viaRelay ? RelayProxy.shared.lastError ?? error.localizedDescription
+                                                             : error.localizedDescription)
             }
         }
         throw lastError
@@ -124,7 +143,7 @@ actor RemoteClient {
     }
 
     /// Called when the stream failed at the transport level, so the next attempt re-probes the hosts.
-    func forgetBase() { base = nil }
+    func forgetBase() { base = nil; path = nil }
 
     // MARK: Plumbing
 
@@ -154,6 +173,7 @@ actor RemoteClient {
             throw e
         } catch {
             self.base = nil
+            self.path = nil
             throw RemoteError.unreachable(error.localizedDescription)
         }
     }
@@ -163,22 +183,58 @@ actor RemoteClient {
         if let base { return base }
         let probe = Self.makeSession(timeout: 4)
         var why = ""
-        for url in credentials.baseURLs {
-            var req = URLRequest(url: url.appending(path: "v1/status"))
+        for candidate in candidates() {
+            let url: URL
+            var req: URLRequest
+            switch candidate {
+            case .direct(let u):
+                url = u
+                req = URLRequest(url: u.appending(path: "v1/status"))
+            case .relay(let info):
+                do { url = try await RelayProxy.shared.baseURL(for: info) } catch {
+                    why = error.localizedDescription; continue
+                }
+                req = URLRequest(url: url.appending(path: "v1/status"))
+                req.timeoutInterval = 15   // TLS to the relay, then the Mac's answer
+            }
             req.setValue("Bearer \(credentials.token)", forHTTPHeaderField: "Authorization")
             do {
                 let (_, resp) = try await probe.data(for: req)
                 if (resp as? HTTPURLResponse)?.statusCode == 401 { throw RemoteError.unauthorized }
                 base = url
-                promote(url)
+                remember(candidate)
                 return url
             } catch let e as RemoteError {
                 throw e
             } catch {
-                why = error.localizedDescription
+                if case .relay = candidate { why = RelayProxy.shared.lastError ?? error.localizedDescription }
+                else { why = error.localizedDescription }
             }
         }
-        throw RemoteError.unreachable(why)
+        throw RemoteError.unreachable(why.isEmpty ? "No address to try." : why)
+    }
+
+    /// The ways to try, in order, for the chosen mode.
+    private func candidates() -> [Candidate] {
+        let direct = credentials.baseURLs.map(Candidate.direct)
+        guard let relay = credentials.relay else { return direct }
+        switch credentials.via ?? .auto {
+        case .direct: return direct
+        case .relay: return [.relay(relay)]
+        case .auto: return credentials.preferRelay == true ? [.relay(relay)] + direct : direct + [.relay(relay)]
+        }
+    }
+
+    private func remember(_ c: Candidate) {
+        switch c {
+        case .direct(let url):
+            path = .direct
+            promote(url)
+            if credentials.preferRelay == true { credentials.preferRelay = nil; Keychain.save(credentials) }
+        case .relay:
+            path = .relay
+            if credentials.preferRelay != true { credentials.preferRelay = true; Keychain.save(credentials) }
+        }
     }
 
     /// Remember the working host first so the next launch tries it before the others.

@@ -165,6 +165,21 @@ final class RemoteStore {
         start()
     }
 
+    /// Which way the stream reaches the Mac right now (shown on the Mac tab).
+    private(set) var activePath: RemoteClient.Path?
+
+    /// Switches between auto / direct / relay and reconnects that way.
+    func setConnectVia(_ via: ConnectVia) async {
+        guard let client else { return }
+        var c = await client.credentials   // keeps what the client learned (host order, relay preference)
+        c.via = via == .auto ? nil : via
+        Keychain.save(c)
+        credentials = c
+        self.client = RemoteClient(credentials: c)
+        activePath = nil
+        reconnect()
+    }
+
     func didPair(_ c: Credentials) {
         // A real pairing ends any demo for good.
         UserDefaults.standard.removeObject(forKey: Self.demoModeKey)
@@ -274,6 +289,7 @@ final class RemoteStore {
         connection = .connected
         failures = 0
         lastError = nil
+        if let client { Task { activePath = await client.path } }
         if let id = openChatId {
             Task { try? await s.send(WSClientMessage(type: .subscribe, chatId: id)) }
         }

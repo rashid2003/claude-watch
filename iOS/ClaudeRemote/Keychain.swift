@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import WatchProtocol
 
 /// What pairing leaves on the phone: where the Mac is and the bearer token it handed out.
 struct Credentials: Codable, Equatable, Sendable {
@@ -8,6 +9,17 @@ struct Credentials: Codable, Equatable, Sendable {
     var token: String
     var deviceId: String
     var macName: String
+    /// The Mac's relay room and key, when it was paired with the relay on (QR v2).
+    var relay: RelayInfo?
+    /// How to reach the Mac; nil = auto.
+    var via: ConnectVia?
+    /// Auto: the relay answered last time, so try it before the direct hosts.
+    var preferRelay: Bool?
+}
+
+/// Direct = Tailscale / local network to the Mac's bridge; relay = through relay.sessionwatch.lajward.co.
+enum ConnectVia: String, Codable, CaseIterable, Sendable {
+    case auto, direct, relay
 }
 
 /// The pairing record, stored as JSON in one generic-password item. Readable after the first unlock

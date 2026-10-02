@@ -33,13 +33,21 @@ struct MacView: View {
                             }
                         }
                         kv("seen", store.connection == .connected ? "now" : Fmt.ago(store.lastUpdated, now: ctx.date))
-                        if let host = store.credentials?.baseURLs.first {
+                        if store.activePath == .relay {
+                            kv("via", "relay · end-to-end encrypted")
+                        } else if let host = store.credentials?.baseURLs.first {
                             kv("host", "\(host.host() ?? host.absoluteString):\(host.port ?? 7433)")
                         }
                         if let v = store.bridgeStatus?.version { kv("version", v) }
                     }
                     .font(Theme.monoSmall)
                     .padding(.vertical, 10)
+                }
+
+                if store.credentials?.relay != nil, !store.isDemo {
+                    Divider()
+                    SectionTitle("connect via")
+                    connectVia
                 }
 
                 Divider()
@@ -157,6 +165,41 @@ struct MacView: View {
             .accessibilityHint("Goes back to the pairing screen")
         }
         .padding(.vertical, 10)
+    }
+
+    /// auto / direct / relay, as a radio list.
+    private var connectVia: some View {
+        let current = store.credentials?.via ?? .auto
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(ConnectVia.allCases, id: \.self) { v in
+                Button {
+                    guard v != current else { return }
+                    Task { await store.setConnectVia(v) }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(v == current ? "◉" : "○").foregroundStyle(v == current ? Theme.clay : .secondary).fixedSize()
+                        Text(v.rawValue).fontWeight(v == current ? .semibold : .regular)
+                        Text(Self.viaNote(v)).foregroundStyle(.secondary).lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(minHeight: 36)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(v == current ? .isSelected : [])
+            }
+        }
+        .font(Theme.monoSmall)
+        .padding(.bottom, 10)
+        .sensoryFeedback(.selection, trigger: current)
+    }
+
+    private static func viaNote(_ v: ConnectVia) -> String {
+        switch v {
+        case .auto: "tailscale first, else relay"
+        case .direct: "tailscale / same network"
+        case .relay: "anywhere, encrypted"
+        }
     }
 
     private func key(_ k: String) -> some View {
