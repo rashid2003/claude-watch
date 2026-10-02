@@ -52,6 +52,7 @@ public final class LiveActivityDriver: @unchecked Sendable {
     public static let heartbeat: TimeInterval = 15 * 60
     public static let rollover: TimeInterval = 7 * 3600 + 45 * 60
     public static let startRetry: TimeInterval = 10 * 60
+    public static let appOpenWindow: TimeInterval = 90
 
     struct Sent { var state: LiveLimits; var at: Date }
 
@@ -77,7 +78,9 @@ public final class LiveActivityDriver: @unchecked Sendable {
                 token = nil
             }
             guard let token else {
-                guard let start = d.activityStartToken,
+                // While the app is open it starts its own; a remote start then would make a second one.
+                let appOpen = d.lastSeenAt.map { now.timeIntervalSince($0) < Self.appOpenWindow } ?? false
+                guard !appOpen, let start = d.activityStartToken,
                       startTried[d.id].map({ now.timeIntervalSince($0) > Self.startRetry }) ?? true else { return out }
                 startTried[d.id] = now
                 sent[d.id] = nil

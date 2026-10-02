@@ -51,6 +51,12 @@ final class LiveActivityTests: XCTestCase {
         XCTAssertTrue(d.plan(for: dev, limits(), macName: "Mac", now: t0 + 60).isEmpty, "start is retried only every 10 min")
     }
 
+    func testDoesNotStartRemotelyWhileTheAppIsOpen() {
+        var dev = device(token: nil)
+        dev.lastSeenAt = t0 - 20
+        XCTAssertTrue(LiveActivityDriver().plan(for: dev, limits(), macName: "Mac", now: t0).isEmpty)
+    }
+
     func testRollsOverBeforeTheEightHourCap() {
         let dev = device(startedAt: t0)
         let plan = LiveActivityDriver().plan(for: dev, limits(), macName: "Mac", now: t0 + 8 * 3600)

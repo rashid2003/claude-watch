@@ -288,6 +288,7 @@ public final class BridgeServer: @unchecked Sendable {
             guard let m = try? WireCoder.decoder.decode(WSClientMessage.self, from: payload) else { return }
             switch m.type {
             case .ping:
+                if let id = conn.device?.id { devices.touch(id) }   // tells the Live Activity driver the app is open
                 if let d = try? WireCoder.encoder.encode(WSServerMessage.pong) { conn.sendText(d) }
             case .unsubscribe: conn.feed = nil
             case .subscribe:
