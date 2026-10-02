@@ -3,7 +3,7 @@ import Foundation
 
 /// How a phone reaches its Mac through the relay. Carried in the pairing QR and kept with the phone's credentials.
 public struct RelayInfo: Codable, Sendable, Equatable {
-    /// e.g. `wss://relay.sessionwatch.lajward.dev`
+    /// e.g. `wss://relay.sessionwatch.lajward.co`
     public var url: String
     public var macId: String
     /// The Mac's static X25519 public key, base64. Pins the Mac: only it can answer a stream's hello.

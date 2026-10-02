@@ -7,7 +7,7 @@
 Two ways for the iPhone to reach the Mac:
 
 1. **Direct** — today's path (Tailscale / LAN to port 7433).
-2. **Relay** — through our Cloudflare Worker at `wss://relay.sessionwatch.lajward.dev`. Needs no Tailscale, port forwarding or VPN. Both ends dial *out*.
+2. **Relay** — through our Cloudflare Worker at `wss://relay.sessionwatch.lajward.co`. Needs no Tailscale, port forwarding or VPN. Both ends dial *out*.
 
 The relay is a dumb, untrusted byte pipe. It never sees plaintext, tokens or chat content.
 
@@ -75,7 +75,7 @@ The phone stores it in `Credentials.relay` and pairs by:
 ## Modes
 
 - **Mac:**
-  - Config `relayEnabled: Bool` (default true) and `relayURL` (default `wss://relay.sessionwatch.lajward.dev`).
+  - Config `relayEnabled: Bool` (default true) and `relayURL` (default `wss://relay.sessionwatch.lajward.co`).
   - Settings shows a toggle plus the relay status: connected / connecting / error.
   - The QR includes `relay` only when enabled.
 - **Phone:**

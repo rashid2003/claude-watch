@@ -73,7 +73,7 @@ public struct Config: Codable, Sendable, Equatable {
     public var requireTailnetOwner: Bool = true
     /// Also reachable through the Session Watch relay, so phones need no Tailscale. End-to-end encrypted.
     public var relayEnabled: Bool = true
-    public var relayURL: String = "wss://relay.sessionwatch.lajward.dev"
+    public var relayURL: String = "wss://relay.sessionwatch.lajward.co"
     /// Mac app appearance: the menu bar item and the Dock icon (at least one stays on).
     public var showInMenuBar: Bool = true
     public var showInDock: Bool = true
