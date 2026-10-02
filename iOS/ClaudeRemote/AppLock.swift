@@ -43,7 +43,7 @@ final class AppLock {
 
     func unlock() async {
         guard isLocked, !authenticating, !demoHold else { return }
-        if await authenticate(reason: "Unlock Claude Watch") { isLocked = false }
+        if await authenticate(reason: "Unlock Session Watch") { isLocked = false }
     }
 
     /// Asks for Face ID / passcode when the lock is on; always true when it's off.

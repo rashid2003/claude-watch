@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Claude Watch</string>
+	<string>Session Watch</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -46,7 +46,7 @@
 	<key>NSFaceIDUsageDescription</key>
 	<string>Face ID protects access to your Claude chats and confirms sensitive actions like allowing shell commands.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Claude Watch connects to Claude Watch on your Mac.</string>
+	<string>Session Watch connects to Session Watch on your Mac.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

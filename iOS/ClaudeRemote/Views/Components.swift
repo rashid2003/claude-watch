@@ -21,7 +21,7 @@ private struct RemoteHeader: ViewModifier {
                     }
                     .font(Theme.monoTitle)
                     .accessibilityElement(children: .combine)
-                    .accessibilityLabel(store.isDemo ? "Claude Watch, demo" : "Claude Watch")
+                    .accessibilityLabel(store.isDemo ? "Session Watch, demo" : "Session Watch")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {

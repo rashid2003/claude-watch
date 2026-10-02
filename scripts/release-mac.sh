@@ -7,19 +7,19 @@
 #   scripts/release-mac.sh --no-notarize   stop after the signed DMG
 #
 # Notarization uses a notarytool keychain profile, created once with:
-#   xcrun notarytool store-credentials claude-watch-notary --apple-id <you> --team-id 6W5NJUTUCV
+#   xcrun notarytool store-credentials session-watch-notary --apple-id <you> --team-id 6W5NJUTUCV
 # (it asks for an app-specific password from appleid.apple.com). Override with NOTARY_PROFILE.
 set -euo pipefail
 cd "${0:A:h}/.."
 
 VERSION="${VERSION:-0.2.0}"
 BUILD="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}"
-BUNDLE_ID="${CLAUDE_WATCH_BUNDLE_ID:-dev.lajward.ClaudeWatch}"
+BUNDLE_ID="${CLAUDE_WATCH_BUNDLE_ID:-dev.lajward.SessionWatch}"
 IDENTITY="${SIGN_IDENTITY:-Developer ID Application: Rashid Obaidi (6W5NJUTUCV)}"
-PROFILE="${NOTARY_PROFILE:-claude-watch-notary}"
+PROFILE="${NOTARY_PROFILE:-session-watch-notary}"
 OUT="build/mac"
 APP="$OUT/ClaudeWatch.app"
-DMG="$OUT/ClaudeWatch-$VERSION.dmg"
+DMG="$OUT/SessionWatch-$VERSION.dmg"
 
 echo "› building universal release"
 ARCHS=(--arch arm64 --arch x86_64)
@@ -35,7 +35,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleName</key><string>ClaudeWatch</string>
-  <key>CFBundleDisplayName</key><string>Claude Watch</string>
+  <key>CFBundleDisplayName</key><string>Session Watch</string>
   <key>CFBundleExecutable</key><string>ClaudeWatch</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
@@ -43,7 +43,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSAppleEventsUsageDescription</key>
-  <string>Claude Watch opens a chat in the right Claude window so it can resume it after a usage limit resets.</string>
+  <string>Session Watch opens a chat in the right Claude window so it can resume it after a usage limit resets.</string>
 </dict></plist>
 PLIST
 
@@ -55,7 +55,7 @@ codesign --verify --strict --deep "$APP"
 
 echo "› packing $DMG"
 STAGE="$OUT/dmg" && mkdir -p "$STAGE" && cp -R "$APP" "$STAGE/" && ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "Claude Watch" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+hdiutil create -volname "Session Watch" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 codesign --force --timestamp --sign "$IDENTITY" "$DMG"
 rm -rf "$STAGE"
 

@@ -331,7 +331,7 @@ case "set-apns-key":
     func flag(_ n: String) -> String? { args.firstIndex(of: n).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
     guard args.count >= 2, let keyId = flag("--key-id"), let teamId = flag("--team-id"),
           let pem = try? String(contentsOfFile: (args[1] as NSString).expandingTildeInPath, encoding: .utf8) else { usage() }
-    let key = APNsKey(keyId: keyId, teamId: teamId, pem: pem, topic: flag("--topic") ?? "dev.lajward.ClaudeWatch")
+    let key = APNsKey(keyId: keyId, teamId: teamId, pem: pem, topic: flag("--topic") ?? "dev.lajward.SessionWatch")
     do { _ = try key.signingKey() } catch { print(A.red("That file isn't an APNs .p8 key: \(error)")); exit(1) }
     print(key.save() ? A.green("Stored in Keychain. Restart ClaudeWatch to start sending pushes.") : A.red("Couldn't write to Keychain."))
 
@@ -392,7 +392,7 @@ case "move":
     if args.contains("--now") {
         restartAndRun([m])
     } else {
-        print(A.dim("It runs once both windows are closed (the Claude Watch app does it). Add --now to restart them now."))
+        print(A.dim("It runs once both windows are closed (the Session Watch app does it). Add --now to restart them now."))
     }
 
 case "moves":

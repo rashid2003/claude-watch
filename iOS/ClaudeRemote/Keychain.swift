@@ -13,7 +13,7 @@ struct Credentials: Codable, Equatable, Sendable {
 /// The pairing record, stored as JSON in one generic-password item. Readable after the first unlock
 /// so notification actions work while the phone is locked; never synced or backed up to other devices.
 enum Keychain {
-    private static let service = "dev.lajward.ClaudeWatch"
+    private static let service = "dev.lajward.SessionWatch"
     private static let account = "pairing"
 
     private static var query: [String: Any] {

@@ -161,7 +161,7 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
         let a = NSAlert()
         a.messageText = queued.count == 1 ? "Move “\(queued[0].title)” to \(queued[0].to.label)?"
                                           : "Move \(queued.count) chats to \(queued[0].to.label)?"
-        a.informativeText = "\(names.joined(separator: " and ")) need to restart. Claude Watch quits them, "
+        a.informativeText = "\(names.joined(separator: " and ")) need to restart. Session Watch quits them, "
             + "moves the chat and opens them again. With Later, the move runs the next time both are closed."
         a.addButton(withTitle: "Restart now")
         a.addButton(withTitle: "Later")
@@ -533,7 +533,7 @@ struct PopoverView: View {
                     Button("Config") { NSWorkspace.shared.open(Paths.config) }
                     Button("Logs") { NSWorkspace.shared.open(Paths.support) }
                     Button("iPhone…") { NSApp.activate(); openWindow(id: "pair") }
-                        .help("Pair the Claude Watch iPhone app")
+                        .help("Pair the Session Watch iPhone app")
                     Spacer()
                     Button("Quit") { model.bridge?.stop(); model.monitor.stop(); NSApp.terminate(nil) }
                 }

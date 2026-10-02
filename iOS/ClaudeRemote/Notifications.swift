@@ -46,7 +46,7 @@ enum Notifications {
     /// Returns false when the Mac couldn't be reached or the job didn't succeed (a local notification says why).
     static func runInBackground(_ c: RemoteCommand, chatId: String?) async -> Bool {
         guard let creds = Keychain.load() else {
-            await postLocal(title: "Claude Watch isn't paired", body: "Open the app to pair with your Mac.", chatId: chatId)
+            await postLocal(title: "Session Watch isn't paired", body: "Open the app to pair with your Mac.", chatId: chatId)
             return false
         }
         let client = RemoteClient(credentials: creds)

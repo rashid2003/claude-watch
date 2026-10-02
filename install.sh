@@ -23,7 +23,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleName</key><string>ClaudeWatch</string>
-  <key>CFBundleDisplayName</key><string>Claude Watch</string>
+  <key>CFBundleDisplayName</key><string>Session Watch</string>
   <key>CFBundleExecutable</key><string>ClaudeWatch</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
@@ -31,7 +31,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSAppleEventsUsageDescription</key>
-  <string>Claude Watch opens a chat in the right Claude window so it can resume it after a usage limit resets.</string>
+  <string>Session Watch opens a chat in the right Claude window so it can resume it after a usage limit resets.</string>
 </dict></plist>
 PLIST
 codesign --force --sign - --identifier "$BUNDLE_ID" "$APP" >/dev/null
