@@ -9,6 +9,7 @@
 # Notarization uses a notarytool keychain profile, created once with:
 #   xcrun notarytool store-credentials session-watch-notary --apple-id <you> --team-id 6W5NJUTUCV
 # (it asks for an app-specific password from appleid.apple.com). Override with NOTARY_PROFILE.
+# Or use an App Store Connect API key (Admin): ASC_KEY_PATH=… ASC_KEY_ID=… ASC_ISSUER_ID=…
 set -euo pipefail
 cd "${0:A:h}/.."
 
@@ -61,14 +62,20 @@ rm -rf "$STAGE"
 
 if [[ "${1:-}" == "--no-notarize" ]]; then echo "Signed (not notarized): $DMG"; exit 0; fi
 
-echo "› notarizing (profile $PROFILE)"
-if ! xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
-  echo "No notarytool profile '$PROFILE'. Create it once:"
-  echo "  xcrun notarytool store-credentials $PROFILE --apple-id <apple id> --team-id 6W5NJUTUCV"
-  echo "Signed (not notarized): $DMG"
-  exit 2
+if [[ -n "${ASC_KEY_PATH:-}" ]]; then
+  echo "› notarizing (App Store Connect key $ASC_KEY_ID)"
+  AUTH=(--key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID")
+else
+  echo "› notarizing (profile $PROFILE)"
+  if ! xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
+    echo "No notarytool profile '$PROFILE'. Create it once, or pass ASC_KEY_PATH / ASC_KEY_ID / ASC_ISSUER_ID:"
+    echo "  xcrun notarytool store-credentials $PROFILE --apple-id <apple id> --team-id 6W5NJUTUCV"
+    echo "Signed (not notarized): $DMG"
+    exit 2
+  fi
+  AUTH=(--keychain-profile "$PROFILE")
 fi
-xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
+xcrun notarytool submit "$DMG" $AUTH --wait
 xcrun stapler staple "$DMG"
 spctl --assess --type open --context context:primary-signature -v "$DMG"
 echo "Ready to share: $DMG"
