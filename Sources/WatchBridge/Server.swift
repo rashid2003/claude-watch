@@ -359,6 +359,13 @@ public final class BridgeServer: @unchecked Sendable {
             devices.update(device.id) { d in
                 if let t = r.apnsToken { d.apnsToken = t; d.apnsEnvironment = r.environment ?? "production" }
                 if let n = r.notify { d.notify.merge(n) { $1 } }
+                if let on = r.liveActivity { d.liveActivity = on }
+                if let t = r.activityToken {
+                    if t != d.activityToken { d.activityStartedAt = t.isEmpty ? nil : Date() }
+                    d.activityToken = t.isEmpty ? nil : t
+                }
+                if let t = r.activityStartToken { d.activityStartToken = t.isEmpty ? nil : t }
+                if r.environment != nil, r.apnsToken == nil { d.apnsEnvironment = r.environment }
             }
             onDevicesChanged?()
             return .json(handler.status(for: devices.all.first { $0.id == device.id } ?? device))

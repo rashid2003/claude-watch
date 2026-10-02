@@ -65,12 +65,12 @@ public struct PushNote: Sendable {
 /// Sends alerts straight to Apple's push service with token auth. No server of ours involved.
 public final class Pusher: @unchecked Sendable {
     public var key: APNsKey?
-    private let session: URLSession
+    let session: URLSession
     private let lock = NSLock()
     private var cachedJWT: (token: String, at: Date)?
     /// A device's token is no longer valid (410 Unregistered / BadDeviceToken).
     public var onInvalidToken: ((String) -> Void)?
-    public private(set) var lastError: String?
+    public internal(set) var lastError: String?
 
     public init(key: APNsKey?, session: URLSession = .shared) { self.key = key; self.session = session }
 

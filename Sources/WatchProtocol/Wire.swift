@@ -163,8 +163,14 @@ public struct DeviceRegistration: Codable, Sendable {
     public var apnsToken: String?
     public var environment: String?          // "sandbox" | "production"
     public var notify: [String: Bool]?
-    public init(apnsToken: String? = nil, environment: String? = nil, notify: [String: Bool]? = nil) {
+    /// Live Activity. An empty token clears it.
+    public var liveActivity: Bool?
+    public var activityToken: String?
+    public var activityStartToken: String?
+    public init(apnsToken: String? = nil, environment: String? = nil, notify: [String: Bool]? = nil,
+                liveActivity: Bool? = nil, activityToken: String? = nil, activityStartToken: String? = nil) {
         self.apnsToken = apnsToken; self.environment = environment; self.notify = notify
+        self.liveActivity = liveActivity; self.activityToken = activityToken; self.activityStartToken = activityStartToken
     }
 }
 

@@ -14,6 +14,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     let server: BridgeServer
     let broker = PromptBroker(path: Paths.bridgeSocket)
     let pusher = Pusher(key: APNsKey.load())
+    let liveActivities = LiveActivityDriver()
     let runner: HeadlessRunner
     private let lock = NSLock()
     private var latest: Snapshot?
@@ -86,6 +87,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         lock.withLock { latest = s }
         server.publish(snapshot: merged)
         notifyTransitions(merged)
+        driveLiveActivities(merged)
         evaluateKeepAwake()
     }
 
@@ -94,6 +96,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         let merged = merge(s)
         server.publish(snapshot: merged)
         notifyTransitions(merged)
+        driveLiveActivities(merged)
     }
 
     /// Adds headless prompts; a chat with one counts as waiting.
@@ -308,6 +311,26 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     private func push(_ note: PushNote, _ event: NotifyEvent) {
         guard pusher.isConfigured else { return }
         for d in server.devices.all where d.wants(event) { pusher.send(note, to: d) }
+    }
+
+    /// Keeps each phone's Lock Screen Live Activity in step with the accounts' limits.
+    private func driveLiveActivities(_ s: Snapshot) {
+        guard pusher.isConfigured else { return }
+        let limits = LiveLimits(s)
+        for d in server.devices.all where d.liveActivity != nil || d.activityToken != nil {
+            for (token, push) in liveActivities.plan(for: d, limits, macName: server.macName) {
+                let id = d.id, isStart = push.event == .start
+                pusher.send(push, token: token, environment: d.apnsEnvironment) { [weak self] in
+                    self?.liveActivities.forget(id)
+                    self?.server.devices.update(id) { isStart ? ($0.activityStartToken = nil) : ($0.activityToken = nil) }
+                }
+                // An ended activity's token is dead; the phone sends the new one once the fresh activity starts.
+                if push.event == .end {
+                    liveActivities.forget(id)
+                    server.devices.update(id) { $0.activityToken = nil; $0.activityStartedAt = nil }
+                }
+            }
+        }
     }
 
     private func accountName(_ s: Snapshot, _ profileId: String) -> String {

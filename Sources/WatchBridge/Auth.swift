@@ -13,6 +13,12 @@ public struct Device: Codable, Hashable, Sendable, Identifiable {
     public var apnsToken: String?
     public var apnsEnvironment: String?
     public var notify: [String: Bool] = [:]
+    /// Live Activity: the phone wants the limits on its Lock Screen, the running activity's update token,
+    /// the token that lets the Mac start a new one, and when the running one began (they last 8 hours).
+    public var liveActivity: Bool?
+    public var activityToken: String?
+    public var activityStartToken: String?
+    public var activityStartedAt: Date?
 
     public func wants(_ e: NotifyEvent) -> Bool { notify[e.rawValue] ?? true }
 }
