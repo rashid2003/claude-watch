@@ -4,9 +4,10 @@
 <dict>
 	<key>aps-environment</key>
 	<string>development</string>
-	<key>com.apple.security.application-groups</key>
+	<key>keychain-access-groups</key>
 	<array>
-		<string>group.dev.lajward.SessionWatch</string>
+		<string>$(AppIdentifierPrefix)dev.lajward.SessionWatch</string>
+		<string>$(AppIdentifierPrefix)dev.lajward.SessionWatch.shared</string>
 	</array>
 </dict>
 </plist>
