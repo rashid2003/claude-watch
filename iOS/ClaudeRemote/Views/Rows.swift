@@ -6,6 +6,7 @@ struct SessionRowView: View {
     @Environment(RemoteStore.self) private var store
     let session: SessionStatus
     var showAccount = true
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let prompt = store.snapshot?.prompts(forChat: session.id).first
@@ -22,6 +23,8 @@ struct SessionRowView: View {
                 Spacer(minLength: 4)
                 let act = activity(prompt: prompt)
                 Text(act.0).foregroundStyle(act.1).lineLimit(1).fixedSize()
+                    .contentTransition(.interpolate)
+                    .animation(.snappy, value: act.0)
             }
             HStack(spacing: 6) {
                 if showAccount {
@@ -29,11 +32,13 @@ struct SessionRowView: View {
                         .fill(AccountColor.color(for: session.info.profileId))
                         .frame(width: 6, height: 6)
                     Text(store.snapshot?.accountName(forProfile: session.info.profileId) ?? session.info.profileId)
+                        .truncationMode(.middle)
                     Text("·").foregroundStyle(.tertiary)
                 }
-                Text(Fmt.relativeAgo(session.info.lastActivityAt))
+                // The time always shows in full; a long account name gives way instead.
+                Text(Fmt.relativeAgo(session.info.lastActivityAt)).fixedSize()
                 Spacer(minLength: 4)
-                if !session.tasks.isEmpty { Text(taskSummary) }
+                if !session.tasks.isEmpty { Text(taskSummary).fixedSize() }
             }
             .font(Theme.monoTiny)
             .foregroundStyle(.secondary)
@@ -42,7 +47,7 @@ struct SessionRowView: View {
             if let d = detail(prompt: prompt) {
                 Text(d.0)
                     .foregroundStyle(d.1)
-                    .lineLimit(1)
+                    .lineLimit(typeSize > .large ? 2 : 1)
                     .padding(.leading, 14)
             }
         }
@@ -95,6 +100,7 @@ struct AccountRowView: View {
     let now: Date
     var showSessions = true
     var showDetailsLink = true
+    @ScaledMetric(relativeTo: .footnote) private var pickerWidth: CGFloat = 170
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -107,13 +113,13 @@ struct AccountRowView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             HStack(spacing: 10) {
-                Text("retry").font(Theme.monoSmall).foregroundStyle(.secondary)
+                Text("retry").font(Theme.monoSmall).foregroundStyle(.secondary).fixedSize()
                 Picker("Retry mode", selection: modeBinding) {
                     ForEach(RetryMode.allCases, id: \.self) { Text($0.rawValue.uppercased()).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(maxWidth: 170)
+                .frame(maxWidth: pickerWidth)
                 .disabled(!store.canSend || store.isPending(Keys.mode(account.id)))
                 if store.isPending(Keys.mode(account.id)) { ProgressView().controlSize(.mini) }
                 Spacer()
@@ -122,6 +128,7 @@ struct AccountRowView: View {
                         Text("details ›")
                     }
                     .buttonStyle(.clayLink)
+                    .fixedSize()
                 }
             }
             if showSessions {
@@ -144,7 +151,8 @@ struct AccountRowView: View {
                 Circle().fill(Theme.color(account.state)).frame(width: 7, height: 7)
                 Text(account.profile.name).fontWeight(.semibold).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 4)
-                Badge(text: badge, color: Theme.color(account.state)).fixedSize()
+                Badge(text: badge, color: Theme.color(account.state))
+                    .animation(.snappy, value: badge)
             }
             .font(Theme.mono)
             Text(account.profile.id + (account.alsoOpenIn.isEmpty ? "" : " + " + account.alsoOpenIn.joined(separator: ", ")))

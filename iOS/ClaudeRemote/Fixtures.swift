@@ -55,7 +55,8 @@ enum Fixtures {
                       limitKind: state == .limited ? .fiveHour : nil,
                       fiveHour: LimitForecast(percent: five, samplePercent: five, sampleAt: now, ratePerHour: 12,
                                               hitsAt: five > 60 && five < 100 ? now.addingTimeInterval(2900) : nil,
-                                              resetsAt: now.addingTimeInterval(7200), resetsFirst: five < 60),
+                                              resetsAt: now.addingTimeInterval(state == .limited ? 3600 : 7200),
+                                              resetsFirst: five < 60),
                       weekly: LimitForecast(percent: week, samplePercent: week, sampleAt: now, ratePerHour: 0.8,
                                             resetsAt: now.addingTimeInterval(3 * 86400), resetsFirst: true),
                       tokens5h: 900_000, tokens7d: 12_000_000, tokensPerHourNow: 140_000,
@@ -94,6 +95,32 @@ enum Fixtures {
                                 detail: "dig +short MX lajward.dev && dig +short TXT _dmarc.lajward.dev",
                                 source: .desktop, kind: .permission, at: now.addingTimeInterval(-200),
                                 canAllowAlways: true)])
+
+    /// Accounts but no chats, prompts, retries or moves: for the empty states.
+    static var emptySnapshot: Snapshot {
+        var s = snapshot
+        for i in s.accounts.indices { s.accounts[i].sessions = [] }
+        s.prompts = []
+        s.queue = []
+        s.moves = []
+        return s
+    }
+
+    /// More chats than fit on a screen, with long titles: for scrolling clear of the dock and truncation.
+    static var busySnapshot: Snapshot {
+        var s = snapshot
+        var extra: [SessionStatus] = []
+        for i in 1...9 {
+            let long = i == 1
+            let title: String = long ? "A really long chat title that will not fit on one line of a phone" : "Older chat \(i)"
+            let cwd: String = long ? "/Users/rashid/Development/an-extremely-long-project-folder-name"
+                : "/Users/rashid/Development/misc"
+            extra.append(session("local_x\(i)", profile: "account-2", title: title, cwd: cwd,
+                                 minutesAgo: Double(i) * 300, activity: .idle))
+        }
+        if let i = s.accounts.firstIndex(where: { $0.id == "account-2" }) { s.accounts[i].sessions += extra }
+        return s
+    }
 
     static let messages: [ChatMessage] = [
         ChatMessage(id: "m1", kind: .user, at: now.addingTimeInterval(-600), text: "Why is mail bouncing for **lajward.dev**?"),

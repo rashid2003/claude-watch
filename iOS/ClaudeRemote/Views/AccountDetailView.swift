@@ -10,6 +10,7 @@ struct AccountDetailView: View {
     @State private var loading = true
     @State private var loadError: String?
     @State private var range: Range = .day
+    @ScaledMetric(relativeTo: .footnote) private var pickerWidth: CGFloat = 150
 
     enum Range: String, CaseIterable, Identifiable {
         case fiveHours = "5h", day = "24h", week = "7d"
@@ -40,7 +41,7 @@ struct AccountDetailView: View {
                             }
                             .pickerStyle(.segmented)
                             .labelsHidden()
-                            .frame(width: 150)
+                            .frame(width: pickerWidth)
                         }
                         chart.padding(.bottom, 10)
                         if a.memberProfileIds.count > 1 || !a.alsoOpenIn.isEmpty {
@@ -49,8 +50,8 @@ struct AccountDetailView: View {
                             ForEach(a.memberProfileIds, id: \.self) { id in
                                 HStack(spacing: 6) {
                                     Text("▸").foregroundStyle(Theme.clay).fixedSize()
-                                    Text(store.snapshot?.accountName(forProfile: id) ?? id)
-                                    Text("· " + id).foregroundStyle(.secondary)
+                                    Text(store.snapshot?.accountName(forProfile: id) ?? id).lineLimit(1)
+                                    Text("· " + id).foregroundStyle(.secondary).lineLimit(1)
                                 }
                                 .font(Theme.monoSmall)
                                 .padding(.vertical, 3)
@@ -59,7 +60,7 @@ struct AccountDetailView: View {
                         Divider()
                         SectionTitle(title: "chats", count: a.sessions.count) { EmptyView() }
                         if a.sessions.isEmpty {
-                            EmptyNote(text: "No recent chats.")
+                            EmptyNote(text: "no recent chats", hint: "start one with + on the chats tab")
                         }
                         ForEach(a.sessions) { s in
                             NavigationLink(value: ChatRoute(id: s.id)) { SessionRowView(session: s, showAccount: false) }
@@ -67,12 +68,13 @@ struct AccountDetailView: View {
                                 .foregroundStyle(.primary)
                         }
                     } else {
-                        EmptyNote(text: "This account isn't in the latest snapshot.")
+                        EmptyNote(text: "this account isn't in the latest snapshot", glyph: "✗")
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
             }
+            .dockClearance()
         }
         .screenBackground()
         .navigationTitle(account?.profile.name.lowercased() ?? "account")
@@ -97,14 +99,13 @@ struct AccountDetailView: View {
 
     @ViewBuilder private var chart: some View {
         if loading && samples.isEmpty {
-            HStack(spacing: 8) { ProgressView().controlSize(.small); Text("loading samples…") }
-                .font(Theme.monoSmall).foregroundStyle(.secondary)
+            LoadingLine(text: "loading samples…")
                 .frame(maxWidth: .infinity, minHeight: 200)
         } else if let loadError, samples.isEmpty {
             Text("✗ " + loadError).font(Theme.monoSmall).foregroundStyle(Theme.red)
                 .frame(maxWidth: .infinity, minHeight: 200)
         } else if visible.isEmpty {
-            Text("no samples in the last \(range.rawValue)").font(Theme.monoSmall).foregroundStyle(.secondary)
+            EmptyNote(text: "no samples in the last \(range.rawValue)", hint: "the mac records one every few minutes")
                 .frame(maxWidth: .infinity, minHeight: 200)
         } else {
             Chart {
@@ -131,7 +132,8 @@ struct AccountDetailView: View {
             .chartXAxis {
                 AxisMarks(values: .automatic(desiredCount: 4)) { _ in
                     AxisGridLine().foregroundStyle(Theme.hairline)
-                    AxisValueLabel(format: range == .week ? .dateTime.weekday(.abbreviated) : .dateTime.hour())
+                    AxisValueLabel(format: range == .week ? .dateTime.weekday(.abbreviated)
+                                   : .dateTime.hour(.defaultDigits(amPM: .abbreviated)))
                         .font(Theme.monoTiny)
                 }
             }
@@ -143,6 +145,7 @@ struct AccountDetailView: View {
                 .font(Theme.monoTiny)
             }
             .frame(height: 200)
+            .animation(.snappy, value: range)
             .accessibilityLabel("Usage over the last \(range.rawValue)")
         }
     }

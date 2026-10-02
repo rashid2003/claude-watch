@@ -132,33 +132,43 @@ struct ChatView: View {
                 withAnimation(.snappy) { tasksExpanded.toggle() }
             } label: {
                 HStack(spacing: 6) {
-                    Text(tasksExpanded ? "▾" : "▸").foregroundStyle(Theme.clay)
-                    Text("tasks").fontWeight(.semibold)
+                    Text("▸").foregroundStyle(Theme.clay).fixedSize()
+                        .rotationEffect(.degrees(tasksExpanded ? 90 : 0))
+                    Text("tasks").fontWeight(.semibold).fixedSize()
                     Text("☑\(done) ◐\(running) ☐\(tasks.count - done - running)").foregroundStyle(.secondary)
-                    Spacer()
+                        .fixedSize()
+                        .contentTransition(.numericText())
+                    Spacer(minLength: 4)
                     if !tasksExpanded, let cur = session?.currentTask {
                         Text("◐ " + cur).foregroundStyle(.secondary).lineLimit(1)
+                            .transition(.opacity)
                     }
                 }
+                .frame(minHeight: 36)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityHint(tasksExpanded ? "Hides the task list" : "Shows the task list")
             if tasksExpanded {
                 ForEach(tasks, id: \.id) { t in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(t.status == .completed ? "☑" : t.status == .in_progress ? "◐" : "☐")
                             .foregroundStyle(t.status == .in_progress ? Theme.yellow : t.status == .completed ? Theme.green : .secondary)
+                            .fixedSize()
                         Text(t.status == .in_progress ? (t.activeForm ?? t.subject) : t.subject)
                             .foregroundStyle(t.status == .completed ? .secondary : .primary)
                             .strikethrough(t.status == .completed, color: .secondary)
                     }
                     .padding(.leading, 14)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
         }
         .font(Theme.monoSmall)
         .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.vertical, 4)
+        .padding(.bottom, tasksExpanded ? 8 : 0)
+        .animation(.snappy, value: session?.tasks.map(\.status))
     }
 
     // MARK: Messages
@@ -181,16 +191,12 @@ struct ChatView: View {
                         .onAppear { Task { await store.loadOlder() } }
                     }
                     if !store.messagesLoaded {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text("loading transcript…")
-                        }
-                        .font(Theme.monoSmall)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 24)
-                        .padding(.horizontal, 8)
+                        LoadingLine(text: "loading transcript…")
+                            .padding(.top, 24)
+                            .padding(.horizontal, 8)
                     } else if store.messages.isEmpty {
-                        EmptyNote(text: "no messages yet").padding(.horizontal, 8)
+                        EmptyNote(text: "no messages yet", hint: "the transcript shows up here as the chat runs")
+                            .padding(.horizontal, 8)
                     }
                     ForEach(store.messages) { m in
                         MessageRow(message: m).id(m.id)
@@ -217,13 +223,19 @@ struct ChatView: View {
 
     @ViewBuilder private var bottomPanel: some View {
         VStack(spacing: 8) {
-            ForEach(prompts) { PromptCard(prompt: $0) }
+            ForEach(prompts) { p in
+                PromptCard(prompt: p)
+                    .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
+                                            removal: .scale(scale: 0.96, anchor: .bottom).combined(with: .opacity)))
+            }
             if session?.isWorking == true {
-                workingBar
+                workingBar.transition(.opacity)
             } else {
-                composer
+                composer.transition(.opacity)
             }
         }
+        .animation(.spring(response: 0.35, dampingFraction: 0.86), value: prompts.map(\.id))
+        .animation(.snappy, value: session?.isWorking)
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 8)
@@ -234,17 +246,20 @@ struct ChatView: View {
 
     private var workingBar: some View {
         HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
+            BusyGlyph(color: Theme.yellow)
             Text(session?.currentTask ?? "working…")
                 .foregroundStyle(Theme.yellow)
                 .lineLimit(1)
-            Spacer()
-            Button("■ stop") { Task { await store.perform(.stop(chatId: chatId)) } }
-                .buttonStyle(OutlineButtonStyle(color: Theme.red))
-                .disabled(!store.canSend || store.isPending(Keys.stop(chatId)))
+            Spacer(minLength: 4)
+            Button("■ stop") {
+                Haptics.deny()
+                Task { await store.perform(.stop(chatId: chatId)) }
+            }
+            .buttonStyle(OutlineButtonStyle(color: Theme.red))
+            .fixedSize()
+            .disabled(!store.canSend || store.isPending(Keys.stop(chatId)))
         }
         .font(Theme.monoSmall)
-        .padding(.vertical, 4)
     }
 
     private var sending: Bool { store.isPending(Keys.reply(chatId)) }
@@ -252,19 +267,22 @@ struct ChatView: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 6) {
             if session?.canContinue == true {
-                HStack {
+                HStack(spacing: 10) {
                     Button("⟳ continue") { send("continue") }
                         .buttonStyle(.clay)
+                        .fixedSize()
                         .disabled(!store.canSend || sending)
-                    Text("the chat stopped on a usage limit")
+                    Text(continueNote)
                         .font(Theme.monoTiny)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                .transition(.opacity)
             }
             HStack(alignment: .bottom, spacing: 8) {
                 HStack(alignment: .center, spacing: 0) {
                     Text("> ").foregroundStyle(Theme.clay).fontWeight(.bold)
-                    TextField(store.canSend ? "reply" : "mac offline", text: $draft, axis: .vertical)
+                    TextField(store.canSend ? "reply" : Theme.label(store.connection) + "…", text: $draft, axis: .vertical)
                         .lineLimit(1...6)
                         .focused($composerFocused)
                         .disabled(!store.canSend)
@@ -272,8 +290,9 @@ struct ChatView: View {
                 }
                 .fieldBox(focused: composerFocused)
                 if sending {
-                    ProgressView()
-                        .frame(width: 40, height: 38)
+                    BusyGlyph()
+                        .font(Theme.monoTitle)
+                        .frame(width: 46, height: 44)
                         .accessibilityLabel("Sending")
                 } else {
                     Button {
@@ -287,14 +306,22 @@ struct ChatView: View {
                 }
             }
             if sending {
-                Text("sending…").font(Theme.monoTiny).foregroundStyle(.secondary)
+                Text("sending…").font(Theme.monoTiny).foregroundStyle(.secondary).transition(.opacity)
             }
         }
+        .animation(.snappy, value: sending)
+    }
+
+    /// "stopped on a usage limit · resets 4:50pm"
+    private var continueNote: String {
+        let reset = session?.tail.lastRateLimit?.resetsAt.map { " · resets " + Fmt.time($0) } ?? ""
+        return "stopped on a usage limit" + reset
     }
 
     private func send(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
+        Haptics.send()
         let before = draft
         if text == draft { draft = "" }
         Task {

@@ -57,17 +57,20 @@ final class RemoteStore {
             snapshot = cached.snapshot
             lastUpdated = cached.receivedAt
         }
+        // "try demo" was chosen last time and nothing has been paired since.
+        if credentials == nil, UserDefaults.standard.bool(forKey: Self.demoModeKey) { enterDemo() }
     }
 
     /// For previews: a store that never touches the network, Keychain or disk.
-    init(preview snapshot: Snapshot?, connection: Connection = .connected, messages: [ChatMessage] = []) {
+    init(preview snapshot: Snapshot?, connection: Connection = .connected, messages: [ChatMessage] = [],
+         paired: Bool = false) {
         self.snapshot = snapshot
         self.lastUpdated = snapshot?.at
         self.connection = connection
         self.messages = messages
         self.messagesLoaded = true
         self.isPreview = true
-        if snapshot != nil {
+        if snapshot != nil || paired {
             credentials = Credentials(baseURLs: [URL(string: "http://127.0.0.1:7433")!], token: "preview",
                                       deviceId: "dev-preview", macName: "Rashid's MacBook Pro")
         }
@@ -75,6 +78,54 @@ final class RemoteStore {
                                     warnings: ["Accessibility permission missing — prompts can't be answered"],
                                     pushConfigured: true, deviceId: "dev-preview",
                                     notify: ["prompt": true, "finished": true, "failed": true, "account": false])
+    }
+
+    // MARK: Demo
+
+    static let demoModeKey = "demoMode"
+
+    /// The in-app demo ("try demo" on the pairing screen, for App Review and the curious): the sample data
+    /// from `-demo`, commands simulated, nothing sent anywhere. Kept across launches until a real pairing.
+    private(set) var isDemo = false
+
+    func enterDemo() {
+        stop()
+        streamTask?.cancel()
+        streamTask = nil
+        client = nil
+        isPreview = true
+        isDemo = true
+        snapshot = Fixtures.snapshot
+        lastUpdated = Date()
+        connection = .connected
+        messages = Fixtures.messages
+        messagesLoaded = true
+        olderCursor = nil
+        pending = [:]
+        jobs = [:]
+        credentials = Credentials(baseURLs: [URL(string: "http://demo-mac.local:7433")!], token: "demo",
+                                  deviceId: "demo-iphone", macName: "Demo MacBook Pro")
+        bridgeStatus = BridgeStatus(macName: "Demo MacBook Pro", version: "demo", warnings: [],
+                                    pushConfigured: true, deviceId: "demo-iphone",
+                                    notify: ["prompt": true, "finished": true, "failed": true, "account": false])
+        UserDefaults.standard.set(true, forKey: Self.demoModeKey)
+    }
+
+    /// Back to the pairing screen.
+    func exitDemo() {
+        UserDefaults.standard.removeObject(forKey: Self.demoModeKey)
+        isDemo = false
+        isPreview = false
+        credentials = nil
+        snapshot = nil
+        bridgeStatus = nil
+        lastUpdated = nil
+        messages = []
+        openChatId = nil
+        pending = [:]
+        jobs = [:]
+        toast = nil
+        connection = .offline
     }
 
     var isPaired: Bool { credentials != nil }
@@ -109,6 +160,14 @@ final class RemoteStore {
     }
 
     func didPair(_ c: Credentials) {
+        // A real pairing ends any demo for good.
+        UserDefaults.standard.removeObject(forKey: Self.demoModeKey)
+        isDemo = false
+        isPreview = false
+        messages = []
+        openChatId = nil
+        pending = [:]
+        jobs = [:]
         Keychain.save(c)
         credentials = c
         client = RemoteClient(credentials: c)
@@ -331,6 +390,12 @@ final class RemoteStore {
         pending[c.requestId] = c
         try? await Task.sleep(for: .seconds(1))
         pending[c.requestId] = nil
+        // An answered prompt goes away, as it would once the Mac passed the answer on.
+        if c.key.hasPrefix("prompt:") {
+            let id = String(c.key.dropFirst("prompt:".count))
+            snapshot?.prompts.removeAll { $0.id == id }
+        }
+        if isDemo { toast = Toast(message: "demo · \(c.label.lowercased()) simulated, nothing was sent", isError: false) }
         return Job(id: "demo-" + c.requestId, requestId: c.requestId, command: c.label, target: nil, status: .done, at: Date())
     }
 
@@ -384,6 +449,7 @@ final class RemoteStore {
     // MARK: Device settings
 
     func setNotify(_ event: NotifyEvent, on: Bool) async {
+        if isPreview { bridgeStatus?.notify[event.rawValue] = on; return }
         guard let client else { return }
         do { bridgeStatus = try await client.register(DeviceRegistration(notify: [event.rawValue: on])) } catch { show(error) }
     }

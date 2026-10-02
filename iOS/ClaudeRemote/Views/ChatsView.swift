@@ -35,10 +35,16 @@ struct ChatsView: View {
                 AccountSwitcher(selection: $accountFilter)
                 if store.snapshot == nil {
                     Divider()
-                    EmptyNote(text: "Waiting for your Mac… chats appear once ClaudeWatch answers.")
+                    EmptyNote(text: "waiting for your mac…", hint: "chats appear once ClaudeWatch answers", busy: true)
                 } else if g.isEmpty {
                     Divider()
-                    EmptyNote(text: search.isEmpty ? "No chats yet." : "Nothing matches “\(search)”.")
+                    if !search.isEmpty {
+                        EmptyNote(text: "nothing matches “\(search)”", hint: "titles and folders are searched")
+                    } else if filterName != nil {
+                        EmptyNote(text: "no chats on this account", hint: "tap all to see every account")
+                    } else {
+                        EmptyNote(text: "no chats yet", hint: "start one with + below")
+                    }
                 }
                 section("needs you", g.needsYou, color: Theme.clay)
                 section("working", g.working, color: Theme.yellow)
@@ -46,8 +52,12 @@ struct ChatsView: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 24)
+            .animation(.snappy, value: g.needsYou.map(\.id))
+            .animation(.snappy, value: g.working.map(\.id))
+            .animation(.snappy, value: accountFilter)
         }
         .scrollToTop(on: scrollToTop)
+        .dockClearance()
         .screenBackground()
         .navigationTitle("chats")
         .remoteHeader()
@@ -74,6 +84,7 @@ struct ChatsView: View {
                 NavigationLink(value: ChatRoute(id: s.id)) { SessionRowView(session: s, showAccount: accountFilter == nil) }
                     .buttonStyle(.row)
                     .foregroundStyle(.primary)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
     }

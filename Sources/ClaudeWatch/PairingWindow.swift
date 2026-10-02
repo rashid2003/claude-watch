@@ -4,7 +4,7 @@ import SwiftUI
 import WatchBridge
 import WatchCore
 
-/// "Pair iPhone…": a QR code the ClaudeRemote app scans, plus the paired devices with Revoke.
+/// "Pair iPhone…": a QR code the Claude Watch iPhone app scans, plus the paired devices with Revoke.
 struct PairingWindow: View {
     @EnvironmentObject var model: WatchModel
     @State private var payload: PairingPayload?
@@ -45,7 +45,7 @@ struct PairingWindow: View {
             }
             .frame(width: 200, height: 200)
             VStack(alignment: .leading, spacing: 8) {
-                Text("In ClaudeRemote, tap Pair and scan this code. Both devices must be on your tailnet.")
+                Text("In Claude Watch on your iPhone, tap Pair and scan this code. Both devices must be on your tailnet.")
                     .fixedSize(horizontal: false, vertical: true)
                 if open, let payload {
                     Text(payload.code).font(.system(size: 30, weight: .semibold, design: .monospaced))

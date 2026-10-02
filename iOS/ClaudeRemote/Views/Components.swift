@@ -15,10 +15,13 @@ private struct RemoteHeader: ViewModifier {
                     HStack(spacing: 6) {
                         Text("✻").foregroundStyle(Theme.clay)
                         Text("claude-remote")
+                        if store.isDemo {
+                            Badge(text: "demo", color: Theme.clay, font: Theme.monoTiny.weight(.semibold))
+                        }
                     }
                     .font(Theme.monoTitle)
                     .accessibilityElement(children: .combine)
-                    .accessibilityLabel("Claude Remote")
+                    .accessibilityLabel(store.isDemo ? "Claude Watch, demo" : "Claude Watch")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -48,25 +51,31 @@ struct StatusStrip: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 5)) { ctx in
             HStack(spacing: 6) {
-                Text(section).font(Theme.monoBold)
+                Text(section).font(Theme.monoBold).layoutPriority(2)
                 Text("·").foregroundStyle(.tertiary)
+                // The age gives way first: "mac unreachable" and "retry" matter more.
                 Text(updated(ctx.date)).foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
                 if store.connection != .connected {
                     Text("·").foregroundStyle(.tertiary)
                     Text(Theme.label(store.connection)).foregroundStyle(Theme.color(store.connection))
+                        .fixedSize()
+                        .transition(.opacity)
                 }
                 Spacer(minLength: 4)
                 if store.connection == .offline {
-                    Button("retry") { store.reconnect() }.buttonStyle(.clayLink)
+                    Button("retry") { store.reconnect() }.buttonStyle(.clayLink).fixedSize()
                 }
             }
             .font(Theme.monoSmall)
             .lineLimit(1)
+            .animation(.snappy, value: store.connection)
         }
         .padding(.vertical, 6)
     }
 
     private func updated(_ now: Date) -> String {
+        if store.isDemo { return "sample data" }
         guard let at = store.lastUpdated else { return "waiting for mac…" }
         return "updated " + Fmt.ago(at, now: now)
     }
@@ -84,7 +93,7 @@ struct ConnectionBanner: View {
                     Text(text(ctx.date)).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
                     if store.connection == .offline {
-                        Button("retry") { store.reconnect() }.buttonStyle(.clayLink)
+                        Button("retry") { store.reconnect() }.buttonStyle(.clayLink).fixedSize()
                     }
                 }
                 .font(Theme.monoSmall)
@@ -103,15 +112,26 @@ struct ConnectionBanner: View {
     }
 }
 
-/// Plain background placeholder, e.g. before the first snapshot.
+/// Terminal-style placeholder: "○ no chats yet", with an optional hint line under it.
+/// `busy` swaps the glyph for the working spinner (e.g. while waiting for the first snapshot).
 struct EmptyNote: View {
     let text: String
+    var hint: String?
+    var glyph = "○"
+    var busy = false
+
     var body: some View {
-        Text(text)
-            .font(Theme.mono)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 12)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if busy { BusyGlyph() } else { Text(glyph).foregroundStyle(.tertiary).fixedSize() }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(text).foregroundStyle(.secondary)
+                if let hint { Text(hint).font(Theme.monoTiny).foregroundStyle(.secondary) }
+            }
+        }
+        .font(Theme.monoSmall)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 14)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -144,16 +164,19 @@ private struct ToastModifier: ViewModifier {
         content.overlay(alignment: .top) {
             if let t = store.toast {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(t.isError ? "✗" : "✓").foregroundStyle(t.isError ? Theme.red : Theme.green)
+                    Text(t.isError ? "✗" : "✓").foregroundStyle(t.isError ? Theme.red : Theme.green).fixedSize()
                     Text(t.message)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                     Button {
                         store.toast = nil
                     } label: {
-                        Text("×").foregroundStyle(.secondary)
+                        Text("×").font(Theme.mono).foregroundStyle(.secondary)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle().inset(by: -6))
                     }
                     .buttonStyle(.plain)
+                    .padding(.vertical, -8)   // the bigger tap area shouldn't make the toast taller
                     .accessibilityLabel("Dismiss")
                 }
                 .font(Theme.monoSmall)
@@ -171,6 +194,7 @@ private struct ToastModifier: ViewModifier {
             }
         }
         .animation(.spring(duration: 0.3), value: store.toast)
+        .sensoryFeedback(trigger: store.toast?.id) { _, _ in store.toast?.isError == true ? .error : nil }
     }
 }
 

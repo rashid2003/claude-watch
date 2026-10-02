@@ -11,11 +11,14 @@ struct PromptCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text("◆").foregroundStyle(Theme.clay)
-                Text(prompt.kind == .permission ? "needs you" : "question").fontWeight(.semibold)
+                Text("◆").foregroundStyle(Theme.clay).fixedSize()
+                Text(prompt.kind == .permission ? "needs you" : "question").fontWeight(.semibold).fixedSize()
                 Text("· " + prompt.toolName).foregroundStyle(.secondary).lineLimit(1)
-                Spacer()
-                Text(Fmt.relativeAgo(prompt.at)).font(Theme.monoTiny).foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                TimelineView(.periodic(from: .now, by: 30)) { ctx in
+                    Text(Fmt.relativeAgo(prompt.at, now: ctx.date)).font(Theme.monoTiny).foregroundStyle(.secondary)
+                        .fixedSize()
+                }
             }
             .font(Theme.monoSmall)
 
@@ -25,12 +28,16 @@ struct PromptCard: View {
                     Button {
                         withAnimation(.snappy) { showDetail.toggle() }
                     } label: {
-                        Text((showDetail ? "▾" : "▸") + " detail")
+                        HStack(spacing: 6) {
+                            Text("▸").rotationEffect(.degrees(showDetail ? 90 : 0)).fixedSize()
+                            Text("detail")
+                        }
                     }
                     .buttonStyle(LinkButtonStyle(color: .secondary))
                     if showDetail {
                         ScrollView { code(detail, lines: nil) }
                             .frame(maxHeight: 180)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
                 buttons
@@ -42,6 +49,7 @@ struct PromptCard: View {
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.background))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.clay, lineWidth: 1))
+        .animation(.snappy, value: sending)
     }
 
     private func code(_ text: String, lines: Int?) -> some View {
@@ -58,24 +66,25 @@ struct PromptCard: View {
 
     @ViewBuilder private var buttons: some View {
         if sending {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("sending…").foregroundStyle(.secondary)
-            }
-            .font(Theme.monoSmall)
-            .padding(.vertical, 6)
+            LoadingLine(text: "sending…")
+                .frame(minHeight: 44)
+                .transition(.opacity)
         } else {
             HStack(spacing: 8) {
-                Button("allow") { answer(.allow) }.buttonStyle(.clay)
+                Button("allow") { answer(.allow) }.buttonStyle(.clay).fixedSize()
                 if prompt.canAllowAlways {
-                    Button("always") { answer(.allowAlways) }.buttonStyle(.outline)
+                    Button("always") { answer(.allowAlways) }.buttonStyle(.outline).fixedSize()
                 }
-                Spacer()
-                Button("deny") { answer(.deny) }
-                    .buttonStyle(LinkButtonStyle(color: Theme.red, font: Theme.mono))
-                    .padding(.trailing, 4)
+                Spacer(minLength: 8)
+                Button { answer(.deny) } label: {
+                    Text("deny").frame(minWidth: 56, minHeight: 36, alignment: .trailing)
+                }
+                .buttonStyle(LinkButtonStyle(color: Theme.red, font: Theme.mono))
+                .fixedSize()
+                .padding(.trailing, 4)
             }
             .disabled(!store.canSend)
+            .transition(.opacity)
         }
     }
 
@@ -84,6 +93,7 @@ struct PromptCard: View {
             // Allowing a shell command is the riskiest thing the phone can do: ask for Face ID again.
             if d != .deny, prompt.toolName == "Bash",
                !(await lock.confirm("Allow “\(prompt.summary.prefix(60))”")) { return }
+            if d == .deny { Haptics.deny() } else { Haptics.allow() }
             await store.perform(.answer(chatId: prompt.chatId, promptId: prompt.id, decision: d))
         }
     }

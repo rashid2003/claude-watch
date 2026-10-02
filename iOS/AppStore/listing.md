@@ -5,7 +5,7 @@
    create an App Store Connect API key (Users and Access › Integrations › App Store Connect API,
    "App Manager" role) and pass it to `scripts/release.sh` through `ASC_KEY_PATH`, `ASC_KEY_ID`
    and `ASC_ISSUER_ID`.
-2. App Store Connect › Apps › **+ New App**: iOS, bundle ID `dev.lajward.ClaudeRemote`
+2. App Store Connect › Apps › **+ New App**: iOS, bundle ID `dev.lajward.ClaudeWatch`
    (Xcode registers it on the first archive with `-allowProvisioningUpdates`), SKU `claude-remote`.
 3. Run `iOS/scripts/release.sh`. The build appears under TestFlight after processing.
 

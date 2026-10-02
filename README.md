@@ -125,7 +125,7 @@ signed into the same tailnet, and the phone reaches the Mac from anywhere.
 
 **Pairing.**
 1. In the menu, click **iPhone…**. This shows a QR code and a 6-digit code.
-2. In ClaudeRemote, tap **Pair** and scan the QR code, or enter the host, port
+2. In Claude Watch on the iPhone, tap **Pair** and scan the QR code, or enter the host, port
    and code by hand.
 
 The code works once, for 2 minutes, and five wrong tries close it. The phone
@@ -145,7 +145,7 @@ logged to `remote-log.jsonl`.
 
 **Push notifications** (optional). Needed for prompts, finished or failed
 chats, and account events. In the Apple Developer portal, create the App ID
-`dev.lajward.ClaudeRemote` with Push Notifications and an APNs auth key (`.p8`),
+`dev.lajward.ClaudeWatch` with Push Notifications and an APNs auth key (`.p8`),
 then run:
 
 ```bash

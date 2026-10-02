@@ -25,8 +25,36 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     static let isDemoPairing = ProcessInfo.processInfo.arguments.contains("-demo-pairing")
 
     let store = isDemoPairing ? RemoteStore(preview: nil, connection: .offline)
-        : isDemo ? RemoteStore(preview: Fixtures.snapshot, messages: Fixtures.messages) : RemoteStore()
-    let lock = isDemo ? AppLock(previewEnabled: false) : AppLock()
+        : isDemo ? demoStore() : RemoteStore()
+    let lock = isDemo ? AppLock(previewEnabled: false, locked: demo("demoLock") != nil) : AppLock()
+
+    /// Demo knobs, for screenshots of every state (launch arguments such as `-demoState offline` land in
+    /// UserDefaults): `demoState` offline | reconnecting | waiting | empty | busy, `demoToast` ok | error,
+    /// `demoOpen` chat:<id> | account:<id>, `demoTab` accounts | mac, `demoLock` 1.
+    static func demo(_ key: String) -> String? {
+        isDemo ? UserDefaults.standard.string(forKey: key) : nil
+    }
+
+    private static func demoStore() -> RemoteStore {
+        let store: RemoteStore = switch demo("demoState") {
+        case "offline": RemoteStore(preview: Fixtures.snapshot, connection: .offline, messages: Fixtures.messages)
+        case "reconnecting": RemoteStore(preview: Fixtures.snapshot, connection: .reconnecting, messages: Fixtures.messages)
+        case "waiting": RemoteStore(preview: nil, connection: .connecting, paired: true)
+        case "empty": RemoteStore(preview: Fixtures.emptySnapshot)
+        case "busy": RemoteStore(preview: Fixtures.busySnapshot, messages: Fixtures.messages)
+        default: RemoteStore(preview: Fixtures.snapshot, messages: Fixtures.messages)
+        }
+        switch demo("demoToast") {
+        case "ok": store.toast = Toast(message: "allowed · Bash", isError: false)
+        case "error": store.toast = Toast(message: "Couldn't reach your Mac: the request timed out.", isError: true)
+        default: break
+        }
+        if let open = demo("demoOpen") {
+            if open.hasPrefix("chat:") { store.deepLink = .chat(String(open.dropFirst(5))) }
+            if open.hasPrefix("account:") { store.deepLink = .account(String(open.dropFirst(8))) }
+        }
+        return store
+    }
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {

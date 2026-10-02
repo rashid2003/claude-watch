@@ -6,7 +6,11 @@ struct RootView: View {
     @Environment(RemoteStore.self) private var store
     @Environment(AppLock.self) private var lock
     @Environment(\.scenePhase) private var phase
-    @State private var tab: AppTab = .chats
+    @State private var tab: AppTab = switch AppDelegate.demo("demoTab") {
+        case "accounts": .accounts
+        case "mac": .mac
+        default: .chats
+    }
     @State private var chatsPath = NavigationPath()
     @State private var accountsPath = NavigationPath()
     @State private var macPath = NavigationPath()
@@ -29,6 +33,7 @@ struct RootView: View {
             }
         }
         .animation(.default, value: lock.isLocked)
+        .animation(.easeInOut(duration: 0.3), value: store.isPaired)
         .toast()
         .onChange(of: phase, initial: true) { _, p in
             switch p {
@@ -55,11 +60,11 @@ struct RootView: View {
         }
         .onChange(of: store.isPaired) { _, paired in
             guard paired else { return }
-            lock.didPair()   // they just scanned the code; don't ask for Face ID straight away
-            Task { await Notifications.requestAuthorization() }
+            lock.didPair()   // they just scanned the code (or chose the demo); don't ask for Face ID straight away
+            if !store.isDemo { Task { await Notifications.requestAuthorization() } }
         }
         .task {
-            if store.isPaired && !AppDelegate.isDemo { await Notifications.requestAuthorization() }
+            if store.isPaired && !AppDelegate.isDemo && !store.isDemo { await Notifications.requestAuthorization() }
         }
     }
 
@@ -86,7 +91,9 @@ struct RootView: View {
             .toolbar(.hidden, for: .tabBar)
             .tag(AppTab.mac)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        // An overlay, not a safe-area inset: TabView doesn't hand that inset on to the scroll views in its
+        // tabs, so each tab's root screen reserves the room itself with `dockClearance()`.
+        .overlay(alignment: .bottom) {
             if showBar {
                 BottomBar(selection: $tab, recoveredAccounts: recovered,
                           onReselect: reselect, onNewChat: { showNewChat = true })
@@ -141,14 +148,15 @@ struct LockView: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            HStack(spacing: 6) {
-                Text("✻").foregroundStyle(Theme.clay)
-                Text("claude-remote")
-            }
-            .font(Theme.monoTitle)
+            Text("✻")
+                .font(.system(size: 44, weight: .regular, design: .monospaced))
+                .foregroundStyle(Theme.clay)
+                .accessibilityHidden(true)
+            Text("claude-remote").font(Theme.monoTitle)
             Text("locked · face id required").font(Theme.monoSmall).foregroundStyle(.secondary)
             Button("unlock") { Task { await lock.unlock() } }
                 .buttonStyle(.clay)
+                .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background.ignoresSafeArea())

@@ -31,9 +31,13 @@ struct BottomBar: View {
     let onReselect: (AppTab) -> Void
     let onNewChat: () -> Void
     @Namespace private var indicator
+    /// The device's own bottom inset: 0 on a Home-button iPhone, where the dock needs its own margin.
+    @State private var deviceBottomInset: CGFloat = 34
 
     private static let height: CGFloat = 54
     private static let radius: CGFloat = 16
+    /// How much of a screen's bottom the dock covers above the safe area (bar + its top and bottom margins).
+    static let clearance: CGFloat = height + 10 + 12
 
     var body: some View {
         HStack(spacing: 10) {
@@ -47,7 +51,13 @@ struct BottomBar: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 10)
-        .padding(.bottom, 4)
+        .padding(.bottom, deviceBottomInset > 0 ? 4 : 12)
+        .background {
+            GeometryReader { g in
+                Color.clear.onAppear { deviceBottomInset = g.safeAreaInsets.bottom }
+                    .onChange(of: g.safeAreaInsets.bottom) { _, v in deviceBottomInset = v }
+            }
+        }
         .background {
             // Fades the list out under the dock instead of cutting it off.
             LinearGradient(colors: [Theme.background.opacity(0), Theme.background.opacity(0.92)],
@@ -56,6 +66,8 @@ struct BottomBar: View {
                 .allowsHitTesting(false)
         }
         .sensoryFeedback(.selection, trigger: selection)
+        .animation(.snappy, value: promptCount)
+        .animation(.snappy, value: workingCount)
     }
 
     private var dock: some View {
@@ -133,6 +145,7 @@ struct BottomBar: View {
 
     private func pill(_ text: String, _ color: Color) -> some View {
         Text(text)
+            .contentTransition(.numericText())
             .font(.system(size: 9.5, weight: .bold, design: .monospaced))
             .foregroundStyle(.black.opacity(0.85))
             .padding(.horizontal, 4)
@@ -181,6 +194,13 @@ struct BottomBar: View {
         case .mac:
             return Theme.label(store.connection)
         }
+    }
+}
+
+extension View {
+    /// Room under a tab's screen for the floating dock, so its last row scrolls clear of it.
+    func dockClearance() -> some View {
+        safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: BottomBar.clearance) }
     }
 }
 

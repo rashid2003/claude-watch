@@ -16,7 +16,7 @@ struct MessageRow: View {
 
     private var user: some View {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
-            Text("> ").foregroundStyle(Theme.clay).fontWeight(.bold)
+            Text("> ").foregroundStyle(Theme.clay).fontWeight(.bold).fixedSize()
             Text(Self.markdown(message.text))
                 .fontWeight(.medium)
                 .textSelection(.enabled)
@@ -39,18 +39,25 @@ struct MessageRow: View {
 
     private var tool: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text("●").foregroundStyle(dotColor)
+            Text("●").foregroundStyle(dotColor).fixedSize()
             Text(message.text)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .truncationMode(.middle)
             Spacer(minLength: 4)
-            switch message.toolOK {
-            case .some(true): Text("✓").foregroundStyle(Theme.green)
-            case .some(false): Text("✗").foregroundStyle(Theme.red)
-            case .none: ProgressView().controlSize(.mini)
+            // A text glyph (not a ProgressView) so the running state sits on the same baseline as ✓ / ✗.
+            Group {
+                switch message.toolOK {
+                case .some(true): Text("✓").foregroundStyle(Theme.green)
+                case .some(false): Text("✗").foregroundStyle(Theme.red)
+                case .none: BusyGlyph(color: Theme.yellow)
+                }
             }
+            .fixedSize()
+            .frame(minWidth: 14)
+            .contentTransition(.opacity)
         }
+        .animation(.snappy, value: message.toolOK)
         .font(Theme.monoSmall)
         .padding(.horizontal, 8)
         .accessibilityElement(children: .combine)
@@ -67,7 +74,7 @@ struct MessageRow: View {
 
     private var error: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text("✗")
+            Text("✗").fixedSize()
             Text(message.text).textSelection(.enabled)
             Spacer(minLength: 0)
         }

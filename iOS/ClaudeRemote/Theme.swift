@@ -5,10 +5,19 @@ import WatchProtocol
 /// The ClaudeWatch menu-bar look (Sources/ClaudeWatch/App.swift `Theme`), scaled up for touch.
 /// Fonts are text-style based so they still follow Dynamic Type (subheadline ≈ 15, footnote ≈ 13, caption2 ≈ 11).
 enum Theme {
-    static let clay = Color(red: 0.851, green: 0.467, blue: 0.341)
-    static let green = Color(red: 0.47, green: 0.75, blue: 0.47)
-    static let yellow = Color(red: 0.86, green: 0.70, blue: 0.35)
-    static let red = Color(red: 0.90, green: 0.40, blue: 0.40)
+    // Status colours are the Mac's on the near-black background; on white they are a shade deeper so text
+    // in them stays readable (the Mac yellow and green are under 2:1 on white).
+    static let clay = adaptive(dark: (0.851, 0.467, 0.341), light: (0.80, 0.40, 0.27))
+    static let green = adaptive(dark: (0.47, 0.75, 0.47), light: (0.18, 0.55, 0.25))
+    static let yellow = adaptive(dark: (0.86, 0.70, 0.35), light: (0.66, 0.47, 0.04))
+    static let red = adaptive(dark: (0.90, 0.40, 0.40), light: (0.80, 0.22, 0.22))
+
+    private static func adaptive(dark: (CGFloat, CGFloat, CGFloat), light: (CGFloat, CGFloat, CGFloat)) -> Color {
+        Color(uiColor: UIColor { t in
+            let c = t.userInterfaceStyle == .dark ? dark : light
+            return UIColor(red: c.0, green: c.1, blue: c.2, alpha: 1)
+        })
+    }
 
     static let mono = Font.system(.subheadline, design: .monospaced)
     static let monoSmall = Font.system(.footnote, design: .monospaced)
@@ -82,15 +91,17 @@ enum Theme {
 struct Badge: View {
     let text: String
     let color: Color
+    var font: Font = Theme.monoSmall
 
     var body: some View {
         Text(text)
-            .font(Theme.monoSmall)
+            .font(font)
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
             .background(RoundedRectangle(cornerRadius: 4).fill(color.opacity(0.15)))
             .foregroundStyle(color)
             .lineLimit(1)
+            .fixedSize()
     }
 }
 
@@ -110,6 +121,7 @@ struct UsageBar: View {
             }
         }
         .frame(height: 5)
+        .animation(.snappy, value: percent)
         .accessibilityHidden(true)
     }
 }
@@ -120,18 +132,27 @@ struct LimitRow: View {
     let f: LimitForecast
     let pace: Double
     let now: Date
+    @ScaledMetric(relativeTo: .footnote) private var percentWidth: CGFloat = 42
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(label).foregroundStyle(.secondary).frame(width: 22, alignment: .leading)
-            UsageBar(percent: f.percent).frame(minWidth: 60, maxWidth: 110)
-            Text(Fmt.percent(f.percent)).frame(width: 42, alignment: .trailing)
+            Text(label).foregroundStyle(.secondary).fixedSize()
+            // A fifth of the screen (so the 5h and 7d bars line up), leaving the forecast
+            // ("safe · resets Mon 11:24am") room for its words on a narrow phone.
+            UsageBar(percent: f.percent)
+                .containerRelativeFrame(.horizontal) { w, _ in min(110, max(56, w * 0.2)) }
+            Text(Fmt.percent(f.percent))
+                .contentTransition(.numericText())
+                .fixedSize()
+                .frame(minWidth: percentWidth, alignment: .trailing)
             Text(Fmt.forecast(f, pace: pace, now: now))
                 .foregroundStyle(soon ? Theme.clay : .secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .lineLimit(1)
+                .lineLimit(typeSize > .large ? 2 : 1)   // at big text sizes wrap rather than lose the reset time
                 .minimumScaleFactor(0.85)
         }
+        .animation(.snappy, value: f.percent)
         .font(Theme.monoSmall)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(label) \(Fmt.percent(f.percent)), \(Fmt.forecast(f, pace: pace, now: now))")
@@ -147,6 +168,7 @@ struct ConnectionDot: View {
     let connection: RemoteStore.Connection
     var body: some View {
         Circle().fill(Theme.color(connection)).frame(width: 8, height: 8)
+            .animation(.easeInOut, value: connection)
             .accessibilityLabel(Theme.label(connection))
     }
 }
@@ -170,7 +192,11 @@ struct SectionTitle<Trailing: View>: View {
     var body: some View {
         HStack(spacing: 6) {
             Text(title).font(Theme.monoBold)
-            if let count { Text("\(count)").font(Theme.monoSmall).foregroundStyle(.secondary) }
+            if let count {
+                Text("\(count)").font(Theme.monoSmall).foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: count)
+            }
             Spacer()
             trailing
         }
@@ -195,8 +221,8 @@ struct StatusLine: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(ok ? "✓" : "✗").foregroundStyle(ok ? Theme.green : warn ? Theme.yellow : Theme.red)
-            Text(text).foregroundStyle(ok ? .primary : .primary)
+            Text(ok ? "✓" : "✗").foregroundStyle(ok ? Theme.green : warn ? Theme.yellow : Theme.red).fixedSize()
+            Text(text)
             Spacer(minLength: 0)
         }
         .font(Theme.monoSmall)
@@ -211,8 +237,10 @@ struct FieldBox: ViewModifier {
             .font(Theme.mono)
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
+            .frame(minHeight: 44)
             .background(RoundedRectangle(cornerRadius: 6).fill(Theme.code))
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(focused ? Theme.clay : Theme.hairline))
+            .animation(.easeOut(duration: 0.15), value: focused)
     }
 }
 
@@ -227,7 +255,7 @@ extension View {
 
 // MARK: - Button styles
 
-/// Filled clay: the primary action ("allow", "pair", "start").
+/// Filled clay: the primary action ("allow", "pair", "start"). At least 44pt tall, like every tap target.
 struct ClayButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     var fill = Theme.clay
@@ -237,12 +265,15 @@ struct ClayButtonStyle: ButtonStyle {
             .foregroundStyle(.white)
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 5).fill(fill.opacity(enabled ? (configuration.isPressed ? 0.75 : 1) : 0.35)))
+            .frame(minHeight: 44)
+            .background(RoundedRectangle(cornerRadius: 6).fill(fill.opacity(enabled ? (configuration.isPressed ? 0.75 : 1) : 0.35)))
             .contentShape(Rectangle())
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.snappy(duration: 0.18), value: configuration.isPressed)
     }
 }
 
-/// Thin outline ("always", "cancel").
+/// Thin outline ("always", "stop").
 struct OutlineButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     var color: Color = .primary
@@ -252,13 +283,17 @@ struct OutlineButtonStyle: ButtonStyle {
             .foregroundStyle(color.opacity(enabled ? 1 : 0.35))
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 5).fill(configuration.isPressed ? Theme.highlight : .clear))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(color.opacity(enabled ? 0.35 : 0.15)))
+            .frame(minHeight: 44)
+            .background(RoundedRectangle(cornerRadius: 6).fill(configuration.isPressed ? Theme.highlight : .clear))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(color.opacity(enabled ? 0.35 : 0.15)))
             .contentShape(Rectangle())
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.snappy(duration: 0.18), value: configuration.isPressed)
     }
 }
 
-/// Link-style text button (clay by default, red for destructive).
+/// Link-style text button (clay by default, red for destructive). It stays compact in the layout, but its
+/// tap area reaches out to 44pt so it is easy to hit inside dense rows.
 struct LinkButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     var color: Color = Theme.clay
@@ -268,7 +303,8 @@ struct LinkButtonStyle: ButtonStyle {
             .font(font)
             .foregroundStyle(color.opacity(enabled ? (configuration.isPressed ? 0.6 : 1) : 0.35))
             .padding(.vertical, 4)
-            .contentShape(Rectangle())
+            .contentShape(Rectangle().inset(by: -8))
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
@@ -276,8 +312,10 @@ struct LinkButtonStyle: ButtonStyle {
 struct RowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .frame(minHeight: 44)
             .contentShape(Rectangle())
-            .background(RoundedRectangle(cornerRadius: 4).fill(configuration.isPressed ? Theme.highlight : .clear))
+            .background(RoundedRectangle(cornerRadius: 5).fill(configuration.isPressed ? Theme.highlight : .clear))
+            .animation(.easeOut(duration: configuration.isPressed ? 0.05 : 0.25), value: configuration.isPressed)
     }
 }
 
@@ -285,3 +323,41 @@ extension ButtonStyle where Self == ClayButtonStyle { static var clay: ClayButto
 extension ButtonStyle where Self == OutlineButtonStyle { static var outline: OutlineButtonStyle { OutlineButtonStyle() } }
 extension ButtonStyle where Self == LinkButtonStyle { static var clayLink: LinkButtonStyle { LinkButtonStyle() } }
 extension ButtonStyle where Self == RowButtonStyle { static var row: RowButtonStyle { RowButtonStyle() } }
+
+// MARK: - Motion and haptics
+
+/// Claude's working glyph, cycling "· ✢ ✳ ✶ ✻ ✽" like the CLI spinner; a still ✻ with Reduce Motion.
+struct BusyGlyph: View {
+    var color: Color = Theme.clay
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private static let frames = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"]
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.12)) { ctx in
+            let i = Int(ctx.date.timeIntervalSinceReferenceDate / 0.12) % Self.frames.count
+            Text(reduceMotion ? "✻" : Self.frames[i])
+                .foregroundStyle(color)
+        }
+        .fixedSize()
+        .accessibilityHidden(true)
+    }
+}
+
+/// "✻ loading transcript…": the terminal-style loading line.
+struct LoadingLine: View {
+    let text: String
+    var body: some View {
+        HStack(spacing: 8) {
+            BusyGlyph()
+            Text(text).foregroundStyle(.secondary)
+        }
+        .font(Theme.monoSmall)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+@MainActor enum Haptics {
+    static func send() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+    static func allow() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+    static func deny() { UIImpactFeedbackGenerator(style: .rigid).impactOccurred() }
+}

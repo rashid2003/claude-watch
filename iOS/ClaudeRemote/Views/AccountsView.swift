@@ -25,13 +25,14 @@ struct AccountsView: View {
                         }
                     } else {
                         Divider()
-                        EmptyNote(text: "Waiting for your Mac… accounts appear once ClaudeWatch answers.")
+                        EmptyNote(text: "waiting for your mac…", hint: "accounts appear once ClaudeWatch answers", busy: true)
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
             }
             .scrollToTop(on: scrollToTop)
+            .dockClearance()
         }
         .screenBackground()
         .navigationTitle("accounts")
@@ -65,19 +66,21 @@ struct QueueSection: View {
     private func row(_ it: RetryItem, mark: String, color: Color, detail: String, active: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                Text(mark).foregroundStyle(color)
+                Text(mark).foregroundStyle(color).fixedSize()
+                    .scaleEffect(mark == "⟳" ? 1.25 : 1)   // the font draws ⟳ smaller than ✓ / ✗
                 Text(store.snapshot?.accountName(forProfile: it.profileId) ?? it.profileId)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                Text(it.title).lineLimit(1)
+                Text(it.title).lineLimit(1).layoutPriority(1)
                 Spacer(minLength: 4)
-                Text(detail).foregroundStyle(.secondary).lineLimit(1)
+                // "in 59m" / "due" must stay whole; the account name, then the title, give way first.
+                Text(detail).foregroundStyle(.secondary).lineLimit(1).layoutPriority(2)
+                    .contentTransition(.numericText())
             }
             if active {
-                HStack(spacing: 16) {
+                HStack(spacing: 20) {
                     if store.isPending(Keys.queue(it.id)) {
-                        ProgressView().controlSize(.mini)
-                        Text("sending…").foregroundStyle(.secondary)
+                        LoadingLine(text: "sending…")
                     } else {
                         if it.status == .waiting || it.status == .failed {
                             Button("retry now") { Task { await store.perform(.retry(itemId: it.id)) } }
@@ -87,7 +90,7 @@ struct QueueSection: View {
                             .buttonStyle(LinkButtonStyle(color: .secondary))
                     }
                     if it.attempts > 0 {
-                        Text("\(it.attempts) attempt\(it.attempts == 1 ? "" : "s")").foregroundStyle(.tertiary)
+                        Text("\(it.attempts) attempt\(it.attempts == 1 ? "" : "s")").foregroundStyle(.secondary)
                     }
                 }
                 .padding(.leading, 16)
@@ -119,10 +122,12 @@ struct MovesSection: View {
             SectionTitle(title: "moves", count: moves.filter { $0.status == .pending }.count) {
                 if moves.contains(where: { $0.status == .pending }) {
                     if store.isPending(Keys.restart) {
-                        ProgressView().controlSize(.mini)
+                        LoadingLine(text: "restarting…")
                     } else {
                         Button("restart windows to finish") { Task { await store.perform(.restartMoves()) } }
                             .buttonStyle(.clayLink)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                             .disabled(!store.canSend)
                     }
                 }
@@ -134,23 +139,22 @@ struct MovesSection: View {
     private func row(_ m: PendingMove) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                Text(mark(m)).foregroundStyle(color(m))
+                Text(mark(m)).foregroundStyle(color(m)).fixedSize()
                 Text(m.title).lineLimit(1)
                 Spacer(minLength: 4)
-                Text(m.status.rawValue).foregroundStyle(color(m))
+                Text(m.status.rawValue).foregroundStyle(color(m)).fixedSize()
             }
             Text("\(m.from.profileName) → \(m.to.label)")
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .padding(.leading, 16)
             if let note = m.note, !note.isEmpty {
-                Text(note).foregroundStyle(.tertiary).lineLimit(2).padding(.leading, 16)
+                Text(note).foregroundStyle(.secondary).lineLimit(2).padding(.leading, 16)
             }
             if m.status == .done || m.status == .pending {
-                HStack(spacing: 16) {
+                HStack(spacing: 20) {
                     if store.isPending(Keys.move(m.id)) {
-                        ProgressView().controlSize(.mini)
-                        Text("sending…").foregroundStyle(.secondary)
+                        LoadingLine(text: "sending…")
                     } else if m.status == .done {
                         Button("undo") { Task { await store.perform(.undoMove(id: m.id)) } }.buttonStyle(.clayLink)
                     } else {

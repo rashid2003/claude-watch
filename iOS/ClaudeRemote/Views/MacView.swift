@@ -10,6 +10,7 @@ struct MacView: View {
     @State private var offerForce = false
     @State private var unpairing = false
     @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
+    @ScaledMetric(relativeTo: .footnote) private var keyWidth: CGFloat = 72
     var scrollToTop = 0
 
     var body: some View {
@@ -25,9 +26,10 @@ struct MacView: View {
                             key("link")
                             ConnectionDot(connection: store.connection).padding(.trailing, 6)
                             Text(Theme.label(store.connection)).foregroundStyle(Theme.color(store.connection))
-                            Spacer()
+                                .lineLimit(1)
+                            Spacer(minLength: 4)
                             if store.connection != .connected {
-                                Button("reconnect") { store.reconnect() }.buttonStyle(.clayLink)
+                                Button("reconnect") { store.reconnect() }.buttonStyle(.clayLink).fixedSize()
                             }
                         }
                         kv("seen", store.connection == .connected ? "now" : Fmt.ago(store.lastUpdated, now: ctx.date))
@@ -71,6 +73,7 @@ struct MacView: View {
                                 Text(title(e))
                             }
                         }
+                        .frame(minHeight: 40)
                         .disabled(!store.canSend)
                     }
                 }
@@ -86,6 +89,7 @@ struct MacView: View {
                         Text("require face id")
                     }
                 }
+                .frame(minHeight: 40)
                 .font(Theme.monoSmall)
                 .tint(Theme.clay)
                 Text("asked on open, before allowing a shell command, and before a new chat")
@@ -95,18 +99,25 @@ struct MacView: View {
                     .padding(.bottom, 10)
 
                 Divider()
-                HStack {
-                    Button("unpair this iphone") { confirmUnpair = true }
+                if store.isDemo {
+                    demoRow
+                } else {
+                    HStack(spacing: 10) {
+                        Button { confirmUnpair = true } label: {
+                            Text("unpair this iphone").frame(minHeight: 36)
+                        }
                         .buttonStyle(LinkButtonStyle(color: Theme.red, font: Theme.mono))
                         .disabled(unpairing)
-                    if unpairing { ProgressView().controlSize(.small) }
+                        if unpairing { BusyGlyph(color: Theme.red).font(Theme.mono) }
+                    }
+                    .padding(.vertical, 6)
                 }
-                .padding(.vertical, 10)
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 24)
         }
         .scrollToTop(on: scrollToTop)
+        .dockClearance()
         .screenBackground()
         .navigationTitle("mac")
         .remoteHeader()
@@ -129,8 +140,27 @@ struct MacView: View {
         }
     }
 
+    /// In the in-app demo: what it is, and the way back to pairing.
+    private var demoRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Badge(text: "demo", color: Theme.clay)
+                Text("sample data · nothing reaches a mac").font(Theme.monoSmall).foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Button {
+                withAnimation(.easeInOut(duration: 0.3)) { store.exitDemo() }
+            } label: {
+                Text("› exit demo").frame(minHeight: 36)
+            }
+            .buttonStyle(LinkButtonStyle(color: Theme.clay, font: Theme.mono))
+            .accessibilityHint("Goes back to the pairing screen")
+        }
+        .padding(.vertical, 10)
+    }
+
     private func key(_ k: String) -> some View {
-        Text(k).foregroundStyle(.secondary).frame(width: 72, alignment: .leading)
+        Text(k).foregroundStyle(.secondary).lineLimit(1).fixedSize().frame(minWidth: keyWidth, alignment: .leading)
     }
 
     private func kv(_ k: String, _ v: String) -> some View {

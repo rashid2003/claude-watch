@@ -22,10 +22,14 @@ final class AppLock {
         isLocked = on
     }
 
-    init(previewEnabled: Bool) {
-        enabled = previewEnabled
-        isLocked = false
+    /// Previews and `-demo`: never asks for Face ID. `locked` shows the lock screen and keeps it up.
+    init(previewEnabled: Bool, locked: Bool = false) {
+        enabled = previewEnabled || locked
+        isLocked = locked
+        demoHold = locked
     }
+
+    @ObservationIgnored private var demoHold = false
 
     /// Called when the app goes to the background (not on `.inactive`, which Face ID itself triggers).
     func lockIfEnabled() {
@@ -38,8 +42,8 @@ final class AppLock {
     }
 
     func unlock() async {
-        guard isLocked, !authenticating else { return }
-        if await authenticate(reason: "Unlock Claude Remote") { isLocked = false }
+        guard isLocked, !authenticating, !demoHold else { return }
+        if await authenticate(reason: "Unlock Claude Watch") { isLocked = false }
     }
 
     /// Asks for Face ID / passcode when the lock is on; always true when it's off.

@@ -533,7 +533,7 @@ struct PopoverView: View {
                     Button("Config") { NSWorkspace.shared.open(Paths.config) }
                     Button("Logs") { NSWorkspace.shared.open(Paths.support) }
                     Button("iPhone…") { NSApp.activate(); openWindow(id: "pair") }
-                        .help("Pair the ClaudeRemote iPhone app")
+                        .help("Pair the Claude Watch iPhone app")
                     Spacer()
                     Button("Quit") { model.bridge?.stop(); model.monitor.stop(); NSApp.terminate(nil) }
                 }

@@ -46,15 +46,19 @@ struct NewChatView: View {
                             cwd = f.cwd
                         } label: {
                             HStack(spacing: 6) {
-                                Text(cwd == f.cwd ? "●" : "▸").foregroundStyle(Theme.clay)
-                                Text(Fmt.folderName(f.cwd))
-                                Text("· " + f.cwd).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                                Text(cwd == f.cwd ? "●" : "▸").foregroundStyle(Theme.clay).fixedSize()
+                                Text(Fmt.folderName(f.cwd)).lineLimit(1).layoutPriority(1)
+                                // The "·" stays put: only the path itself is cut, from the front.
+                                Text("·").foregroundStyle(.tertiary)
+                                Text(f.cwd).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                                 Spacer(minLength: 4)
-                                Text(Fmt.relativeAgo(f.lastUsedAt)).foregroundStyle(.tertiary)
+                                Text(Fmt.relativeAgo(f.lastUsedAt)).foregroundStyle(.secondary).fixedSize()
                             }
                             .font(Theme.monoSmall)
                             .padding(.vertical, 6)
                             .padding(.horizontal, 4)
+                            .background(RoundedRectangle(cornerRadius: 5).fill(cwd == f.cwd ? Theme.highlight : .clear))
+                            .animation(.snappy, value: cwd)
                         }
                         .buttonStyle(.row)
                         .foregroundStyle(.primary)
@@ -67,6 +71,16 @@ struct NewChatView: View {
                         .scrollContentBackground(.hidden)
                         .frame(minHeight: 140)
                         .focused($focus, equals: .prompt)
+                        .overlay(alignment: .topLeading) {
+                            if prompt.isEmpty {
+                                Text("what should claude do?")
+                                    .font(Theme.mono)
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 8)
+                                    .allowsHitTesting(false)
+                            }
+                        }
                         .padding(4)
                         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.code))
                         .overlay(RoundedRectangle(cornerRadius: 6)
@@ -75,8 +89,7 @@ struct NewChatView: View {
                     HStack {
                         Spacer()
                         if starting {
-                            ProgressView().controlSize(.small)
-                            Text("starting…").font(Theme.monoSmall).foregroundStyle(.secondary)
+                            LoadingLine(text: "starting…").frame(minHeight: 44)
                         } else {
                             Button("↵ start") { start() }
                                 .buttonStyle(.clay)
@@ -117,17 +130,19 @@ struct NewChatView: View {
             profileId = a.id
         } label: {
             HStack(spacing: 6) {
-                Text(profileId == a.id ? "●" : "○").foregroundStyle(profileId == a.id ? Theme.clay : .secondary)
+                Text(profileId == a.id ? "●" : "○").foregroundStyle(profileId == a.id ? Theme.clay : .secondary).fixedSize()
                 Circle().fill(Theme.color(a.state)).frame(width: 7, height: 7)
                 Text(a.profile.name).fontWeight(profileId == a.id ? .semibold : .regular)
-                Text("· 5h " + Fmt.percent(a.fiveHour.percent)).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle).layoutPriority(1)
+                Text("· 5h " + Fmt.percent(a.fiveHour.percent)).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 4)
                 Badge(text: Theme.label(a.state), color: Theme.color(a.state))
             }
             .font(Theme.mono)
             .padding(.vertical, 7)
             .padding(.horizontal, 4)
-            .background(RoundedRectangle(cornerRadius: 4).fill(profileId == a.id ? Theme.highlight : .clear))
+            .background(RoundedRectangle(cornerRadius: 5).fill(profileId == a.id ? Theme.highlight : .clear))
+            .animation(.snappy, value: profileId)
         }
         .buttonStyle(.row)
         .foregroundStyle(.primary)

@@ -15,6 +15,7 @@ struct PairingView: View {
 
     private enum Field { case host, port, code }
     private let hasCamera = QRScanner.isAvailable
+    @ScaledMetric(relativeTo: .subheadline) private var labelWidth: CGFloat = 40
 
     var body: some View {
         NavigationStack {
@@ -70,18 +71,40 @@ struct PairingView: View {
                         }
                         Spacer(minLength: 8)
                         if busy {
-                            ProgressView().controlSize(.small)
-                            Text("pairing…").font(Theme.monoSmall).foregroundStyle(.secondary)
+                            LoadingLine(text: "pairing…").frame(minHeight: 44)
                         } else {
                             Button("↵ pair") {
                                 let hosts = host.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                                 Task { await pair(hosts: hosts, port: Int(port) ?? 7433, code: code) }
                             }
                             .buttonStyle(.clay)
+                            .fixedSize()
                             .disabled(host.trimmingCharacters(in: .whitespaces).isEmpty || code.count != 6 || Int(port) == nil)
                         }
                     }
                     .padding(.top, 14)
+
+                    Divider().padding(.top, 18)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text("no mac handy?").foregroundStyle(.secondary)
+                            Button {
+                                focus = nil
+                                Haptics.send()
+                                withAnimation(.easeInOut(duration: 0.3)) { store.enterDemo() }
+                            } label: {
+                                Text("› try demo").frame(minHeight: 36)
+                            }
+                            .buttonStyle(LinkButtonStyle(color: Theme.clay, font: Theme.monoSmall.weight(.semibold)))
+                            .disabled(busy)
+                            .accessibilityHint("Shows the app with sample accounts and chats")
+                        }
+                        Text("sample accounts and chats · nothing is sent anywhere · exit from the mac tab")
+                            .font(Theme.monoTiny)
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(Theme.monoSmall)
+                    .padding(.top, 8)
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
@@ -103,7 +126,7 @@ struct PairingView: View {
 
     private func field<F: View>(_ label: String, focus f: Field, @ViewBuilder _ content: () -> F) -> some View {
         HStack(spacing: 8) {
-            Text(label).foregroundStyle(.secondary).frame(width: 40, alignment: .leading)
+            Text(label).foregroundStyle(.secondary).fixedSize().frame(minWidth: labelWidth, alignment: .leading)
             content().focused($focus, equals: f)
         }
         .fieldBox(focused: focus == f)
