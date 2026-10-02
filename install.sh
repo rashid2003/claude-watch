@@ -2,9 +2,18 @@
 # Builds ClaudeWatch.app (menu bar) + the claude-watch CLI and installs them.
 #   ./install.sh            -> ~/Applications/ClaudeWatch.app and ~/.local/bin/claude-watch
 #   ./install.sh --no-open  -> don't launch the app afterwards
+#   ./install.sh --force    -> install even if the notarized /Applications/Session Watch.app exists
 set -euo pipefail
 cd "${0:A:h}"
 BUNDLE_ID="${CLAUDE_WATCH_BUNDLE_ID:-local.claude-watch}"
+
+# The notarized release (scripts/release-mac.sh) lives in /Applications. Two copies would fight over
+# the same config and port, so don't install a local build next to it unless asked.
+if [[ -d "/Applications/Session Watch.app" && "${1:-}" != "--force" && "${2:-}" != "--force" ]]; then
+  echo "Session Watch (notarized) is installed in /Applications. To update it, run scripts/release-mac.sh"
+  echo "and copy the new app from build/mac/. Use ./install.sh --force for a local build instead."
+  exit 1
+fi
 
 swift build -c release --product ClaudeWatch
 swift build -c release --product claude-watch
