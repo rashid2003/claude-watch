@@ -37,7 +37,13 @@ struct AccountTokens {
 }
 
 public final class Monitor {
-    public private(set) var config: Config
+    /// Read from any thread (the bridge checks it per connection); written on the monitor queue.
+    public private(set) var config: Config {
+        get { configLock.withLock { _config } }
+        set { configLock.withLock { _config = newValue } }
+    }
+    private var _config: Config
+    private let configLock = NSLock()
     public private(set) var snapshot: Snapshot?
     public var onSnapshot: ((Snapshot) -> Void)?
     public var onEvent: ((WatchEvent) -> Void)?
@@ -62,17 +68,64 @@ public final class Monitor {
     public private(set) var liveRunners: [String: Int32] = [:]
 
     public init(ownEngine: Bool = true) {
-        config = Config.load()
+        _config = Config.load()
         engine = RetryEngine(owner: ownEngine && EngineLock.acquire())
         engine.onEvent = { [weak self] item, msg in self?.onEvent?(.retry(item, msg)) }
     }
 
     public func start() {
         let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now(), repeating: config.pollSeconds, leeway: .seconds(2))
+        t.schedule(deadline: .now(), repeating: Self.interval(config.pollSeconds), leeway: .seconds(2))
         t.setEventHandler { [weak self] in autoreleasepool { self?.poll() } }
         timer = t
+        timerInterval = Self.interval(config.pollSeconds)
         t.resume()
+    }
+
+    private var timerInterval: Double = 0
+    private static func interval(_ s: Double) -> Double { max(3, s.isFinite ? s : 15) }
+
+    /// Follows a changed `pollSeconds` (monitor queue only).
+    private func rescheduleIfNeeded() {
+        let want = Self.interval(config.pollSeconds)
+        guard let timer, want != timerInterval else { return }
+        timerInterval = want
+        timer.schedule(deadline: .now() + want, repeating: want, leeway: .seconds(2))
+    }
+
+    public enum ConfigError: Error, LocalizedError {
+        case unreadable
+        public var errorDescription: String? {
+            "config.json couldn't be read, so it wasn't overwritten. Fix or delete it, then try again."
+        }
+    }
+
+    /// Edits config.json: re-reads it (so edits made elsewhere survive), applies `change`, saves
+    /// atomically and applies the result right away. `done` gets the saved config or the error,
+    /// on the monitor queue.
+    public func updateConfig(_ change: @escaping (inout Config) -> Void,
+                             done: ((Result<Config, Error>) -> Void)? = nil) {
+        queue.async { [self] in
+            var cfg: Config
+            if FileManager.default.fileExists(atPath: Paths.config.path) {
+                guard let disk = Config.load(from: Paths.config) else { done?(.failure(ConfigError.unreadable)); return }
+                cfg = disk
+            } else {
+                cfg = config
+            }
+            change(&cfg)
+            do {
+                try cfg.save()
+            } catch {
+                done?(.failure(error)); return
+            }
+            config = cfg
+            configMtime = Self.mtime(Paths.config)
+            profilesAt = .distantPast
+            rescheduleIfNeeded()
+            done?(.success(cfg))
+            poll()
+        }
     }
 
     public func refreshNow() { queue.async { [weak self] in autoreleasepool { self?.poll() } } }
@@ -91,13 +144,10 @@ public final class Monitor {
     public func pollOnce() -> Snapshot { queue.sync { autoreleasepool { poll() }; scanner.save(); return snapshot! } }
 
     public func setRetryMode(_ mode: RetryMode, for profileId: String) {
-        queue.async { [self] in
-            var pc = config.profiles[profileId] ?? ProfileConfig()
+        updateConfig { cfg in
+            var pc = cfg.profiles[profileId] ?? ProfileConfig()
             pc.retryMode = mode
-            config.profiles[profileId] = pc
-            try? config.save()
-            configMtime = Self.mtime(Paths.config)
-            poll()
+            cfg.profiles[profileId] = pc
         }
     }
 
@@ -169,6 +219,7 @@ public final class Monitor {
             configMtime = m
             config = Config.load()
             profilesAt = .distantPast
+            rescheduleIfNeeded()
         }
         if now.timeIntervalSince(profilesAt) > 300 {
             profiles = ProfileDiscovery.discover(config: config)

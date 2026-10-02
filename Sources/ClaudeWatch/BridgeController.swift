@@ -41,7 +41,8 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         let tool = Self.cliPath()
         runner = HeadlessRunner(promptTool: { sid in tool.map { [$0, "prompt-tool", "--socket", socket, "--session", sid] } })
         server.handler = self
-        if cfg.requireTailnetOwner { server.peerCheck = { [owner] in owner.allows($0) } }
+        // Read the setting per connection, so turning it off or on in Settings applies right away.
+        server.peerCheck = { [owner, monitor] in !monitor.config.requireTailnetOwner || owner.allows($0) }
         server.onDevicesChanged = { [weak self] in self?.devicesChanged() }
         server.pairing.onClose = { [weak self] in DispatchQueue.main.async { self?.onChange?() } }
         broker.describe = { [weak self] id in

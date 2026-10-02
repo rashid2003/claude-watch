@@ -1,7 +1,7 @@
 # claude-watch
 
-A small menu-bar app and terminal dashboard that watches several Claude desktop
-profiles on this Mac, and resumes chats that died on a usage limit once it resets.
+A small Mac app (main window plus a menu bar item) and terminal dashboard that watches several
+Claude desktop profiles on this Mac, and resumes chats that died on a usage limit once it resets.
 
 - **Status per account**: free / working / limited, running window, live chats and their task lists
 - **Usage**: 5-hour and weekly %, token totals, current pace
@@ -19,8 +19,10 @@ Memory is about 25–50 MB, with idle CPU near 0.
 ./install.sh
 ```
 
-This builds `~/Applications/ClaudeWatch.app` (menu bar, no Dock icon) and
-`~/.local/bin/claude-watch`, then launches the app. On first launch, allow:
+This builds `~/Applications/ClaudeWatch.app` and `~/.local/bin/claude-watch`, then launches the app.
+The main window has Overview (accounts, retry queue, moves), Chats, iPhone (pairing) and Settings
+(also ⌘,). Settings › Appearance turns the menu bar item and the Dock icon on or off (one stays on)
+and sets Launch at login; opening the app again shows the window. On first launch, allow:
 
 - **Notifications**
 - **Accessibility**, needed for UI-mode retries (System Settings › Privacy & Security › Accessibility)
@@ -171,6 +173,6 @@ swift run claude-watch status
 ```
 
 `Sources/WatchCore` holds the readers, forecaster and retry engine.
-`Sources/claude-watch` is the terminal UI and `Sources/ClaudeWatch` is the menu-bar app.
+`Sources/claude-watch` is the terminal UI and `Sources/ClaudeWatch` is the Mac app.
 `Sources/WatchProtocol` holds the wire types shared with the iPhone app, and
 `Sources/WatchBridge` is the HTTP/WebSocket bridge, pairing, prompt broker and push sender.

@@ -36,7 +36,7 @@ public enum Paths {
     }
 }
 
-public struct ProfileConfig: Codable, Sendable {
+public struct ProfileConfig: Codable, Sendable, Equatable {
     public var name: String?
     public var hidden: Bool?
     public var retryMode: RetryMode?
@@ -45,7 +45,7 @@ public struct ProfileConfig: Codable, Sendable {
     }
 }
 
-public struct Config: Codable, Sendable {
+public struct Config: Codable, Sendable, Equatable {
     public var pollSeconds: Double = 15
     public var defaultRetryMode: RetryMode = .ui
     public var retryMessage: String = "continue"
@@ -69,6 +69,9 @@ public struct Config: Codable, Sendable {
     public var keepAwakeOnlyOnAC: Bool = true
     /// Only accept phones signed into the same Tailscale account as this Mac (`tailscale whois`).
     public var requireTailnetOwner: Bool = true
+    /// Mac app appearance: the menu bar item and the Dock icon (at least one stays on).
+    public var showInMenuBar: Bool = true
+    public var showInDock: Bool = true
 
     public init() {}
 
@@ -91,6 +94,8 @@ public struct Config: Codable, Sendable {
         keepAwakeWhenPaired = try c.decodeIfPresent(Bool.self, forKey: .keepAwakeWhenPaired) ?? d.keepAwakeWhenPaired
         keepAwakeOnlyOnAC = try c.decodeIfPresent(Bool.self, forKey: .keepAwakeOnlyOnAC) ?? d.keepAwakeOnlyOnAC
         requireTailnetOwner = try c.decodeIfPresent(Bool.self, forKey: .requireTailnetOwner) ?? d.requireTailnetOwner
+        showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .showInMenuBar) ?? d.showInMenuBar
+        showInDock = try c.decodeIfPresent(Bool.self, forKey: .showInDock) ?? d.showInDock
     }
 
     public func retryMode(for profileId: String) -> RetryMode {
@@ -107,8 +112,16 @@ public struct Config: Codable, Sendable {
         return cfg
     }
 
-    public func save() throws {
-        try JSONCoder.pretty.encode(self).write(to: Paths.config, options: .atomic)
+    public func save() throws { try save(to: Paths.config) }
+
+    /// Writes atomically (temp file + rename), so a reader never sees half a file.
+    public func save(to url: URL) throws {
+        try JSONCoder.pretty.encode(self).write(to: url, options: .atomic)
+    }
+
+    public static func load(from url: URL) -> Config? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONCoder.decoder.decode(Config.self, from: data)
     }
 }
 

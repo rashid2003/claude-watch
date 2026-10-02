@@ -5,30 +5,69 @@ import WatchCore
 
 // MARK: - Model
 
+/// Sections of the main window's sidebar.
+enum MainSection: String, CaseIterable, Identifiable, Hashable {
+    case overview, chats, iphone, settings
+    var id: String { rawValue }
+    var title: String { self == .iphone ? "iphone" : rawValue }
+    var symbol: String {
+        switch self {
+        case .overview: "gauge.with.dots.needle.33percent"
+        case .chats: "bubble.left.and.bubble.right"
+        case .iphone: "iphone"
+        case .settings: "gearshape"
+        }
+    }
+}
+
 final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
+    /// One per process: the app delegate and the SwiftUI scenes share it.
+    static let shared = WatchModel()
+
     @Published var snapshot: Snapshot?
     @Published var trusted = UIRetry.isTrusted
     @Published var chatsProfile: String?     // account picked when opening the All chats window
     @Published var bridgeTick = 0             // bumps when paired devices / pairing change
+    @Published var section: MainSection? = .overview
+    /// Mirror of config.json; edit it with `updateConfig` so the file and the Monitor follow.
+    @Published private(set) var config = Config() {
+        didSet { if config.showInDock != oldValue.showInDock { applyActivationPolicy() } }
+    }
+    @Published var configError: String?
     let monitor = Monitor(ownEngine: true)
     private(set) var bridge: BridgeController?
+    /// Bridge settings this process started with (changing them needs a restart).
+    let bridgeAtLaunch: (enabled: Bool, port: Int)
+    private var pendingWrites = 0
+    /// Captured from any SwiftUI view, so AppKit callbacks (Dock click, reopen) can open the main window.
+    var openWindowAction: OpenWindowAction?
 
     override init() {
+        bridgeAtLaunch = (monitor.config.bridgeEnabled, monitor.config.bridgePort)
         super.init()
+        config = monitor.config
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
-        if monitor.config.bridgeEnabled {
+        var bridgeOn = monitor.config.bridgeEnabled
+        #if DEBUG
+        // A dev copy next to the installed app must not take over its bridge socket.
+        if ProcessInfo.processInfo.environment["SW_NO_BRIDGE"] != nil { bridgeOn = false }
+        #endif
+        if bridgeOn {
             let b = BridgeController(monitor: monitor)
             b.onChange = { [weak self] in self?.bridgeTick += 1 }
             b.start()
             bridge = b
         }
         monitor.onSnapshot = { [weak self] s in
-            self?.bridge?.update(s)
+            guard let self else { return }
+            self.bridge?.update(s)
+            let cfg = self.monitor.config   // on the monitor queue: follows edits made outside the app
             DispatchQueue.main.async {
-                self?.snapshot = s
-                self?.trusted = UIRetry.isTrusted
+                self.snapshot = s
+                self.trusted = UIRetry.isTrusted
+                if self.pendingWrites == 0, cfg != self.config { self.config = cfg }
             }
         }
         monitor.onEvent = { [weak self] e in self?.notify(e); self?.bridge?.event(e) }
@@ -98,6 +137,85 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
     }
 
     func setMode(_ mode: RetryMode, _ profileId: String) { monitor.setRetryMode(mode, for: profileId) }
+
+    // MARK: Config
+
+    /// Applies `change` here at once, then saves config.json through the Monitor (which re-reads
+    /// the file first, writes it atomically and starts using it).
+    func updateConfig(_ change: @escaping (inout Config) -> Void) {
+        var c = config
+        change(&c)
+        config = c
+        pendingWrites += 1
+        monitor.updateConfig(change) { [weak self] r in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.pendingWrites -= 1
+                switch r {
+                case .success(let saved):
+                    self.configError = nil
+                    if self.pendingWrites == 0 { self.config = saved }
+                case .failure(let e):
+                    self.configError = e.localizedDescription
+                    if self.pendingWrites == 0 { self.config = self.monitor.config }
+                }
+            }
+        }
+    }
+
+    /// At least one of the menu bar item and the Dock icon stays on.
+    func setShowInMenuBar(_ on: Bool) {
+        guard on != config.showInMenuBar else { return }
+        updateConfig { $0.showInMenuBar = on; if !on { $0.showInDock = true } }
+    }
+
+    func setShowInDock(_ on: Bool) {
+        guard on != config.showInDock else { return }
+        updateConfig { $0.showInDock = on; if !on { $0.showInMenuBar = true } }
+    }
+
+    // MARK: Windows
+
+    /// `.regular` (Dock, Cmd-Tab, menu bar) or `.accessory` (menu bar item only). Overrides LSUIElement.
+    func applyActivationPolicy() {
+        guard let app = NSApp else { return }
+        let want: NSApplication.ActivationPolicy = config.showInDock ? .regular : .accessory
+        guard app.activationPolicy() != want else { return }
+        let wasVisible = mainWindow?.isVisible ?? false
+        app.setActivationPolicy(want)
+        // Leaving the Dock deactivates the app; keep the window in front.
+        if wasVisible { DispatchQueue.main.async { self.showMain() } }
+    }
+
+    var mainWindow: NSWindow? {
+        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix(MainWindow.id) == true && $0.canBecomeMain }
+    }
+
+    /// Opens (or fronts) the main window, optionally on a section. Works in `.accessory` mode too.
+    func showMain(_ section: MainSection? = nil) {
+        if let section { self.section = section }
+        if let w = mainWindow, w.isVisible {
+            if w.isMiniaturized { w.deminiaturize(nil) }
+            w.makeKeyAndOrderFront(nil)
+        } else {
+            openWindowAction?(id: MainWindow.id)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async { self.mainWindow?.makeKeyAndOrderFront(nil) }
+    }
+
+    func quit() { NSApp.terminate(nil) }   // AppDelegate.applicationWillTerminate stops the bridge and monitor
+
+    func shutdown() { bridge?.stop(); monitor.stop() }
+
+    /// Quits and opens the app again (bridge port / on-off changes need a fresh process).
+    func relaunch() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", "sleep 1; /usr/bin/open \"$0\"", Bundle.main.bundleURL.path]
+        try? p.run()
+        quit()
+    }
 
     /// Retry every waiting chat of an account (all its member profiles).
     func retryAll(_ profileIds: [String]) { request(profileIds.map { .profile($0) }) }
@@ -201,6 +319,8 @@ enum Theme {
     static let green = Color(red: 0.47, green: 0.75, blue: 0.47)
     static let yellow = Color(red: 0.86, green: 0.70, blue: 0.35)
     static let red = Color(red: 0.90, green: 0.40, blue: 0.40)
+    static let panel = Color.primary.opacity(0.04)
+    static let hairline = Color.primary.opacity(0.12)
 
     static func color(_ s: AccountState) -> Color {
         switch s { case .free: green; case .working: clay; case .limited: red; case .offline: .secondary }
@@ -253,6 +373,8 @@ struct LimitRow: View {
 
 struct SessionRow: View {
     let s: SessionStatus
+    var account: String? = nil     // shown in the main window's all-accounts list
+    var lastActive = false         // show "3m ago"
     let open: () -> Void
     @EnvironmentObject var model: WatchModel
     @State private var hover = false
@@ -264,7 +386,9 @@ struct SessionRow: View {
                 Text(s.info.title).lineLimit(1).truncationMode(.tail)
                 Text("· " + (s.info.cwd as NSString).lastPathComponent)
                     .foregroundStyle(.secondary).lineLimit(1)
+                if let account { Text("· " + account).foregroundStyle(.tertiary).lineLimit(1) }
                 Spacer(minLength: 4)
+                if lastActive { Text(Fmt.ago(s.info.lastActivityAt)).foregroundStyle(.tertiary).lineLimit(1) }
                 if let p = model.pendingMove(for: s.id) {
                     Text("→ " + p.to.profileName + " · waiting for restart").foregroundStyle(Theme.clay).lineLimit(1)
                     Button { model.cancelMove(p.id) } label: { Image(systemName: "xmark") }
@@ -322,6 +446,7 @@ struct AccountCard: View {
     let a: AccountStatus
     let now: Date
     var queue: [RetryItem] = []   // this account's retry items
+    var maxSessions = 4           // chats listed under the card (the main window shows more)
     @EnvironmentObject var model: WatchModel
     @Environment(\.openWindow) private var openWindow
 
@@ -376,7 +501,7 @@ struct AccountCard: View {
     }
 
     var visibleSessions: [SessionStatus] {
-        let active = a.sessions.filter { $0.activity != .idle }.prefix(4)
+        let active = a.sessions.filter { $0.activity != .idle }.prefix(maxSessions)
         let idle = a.sessions.filter { $0.activity == .idle }.prefix(max(0, 2 - active.count))
         return Array(active) + Array(idle)
     }
@@ -388,24 +513,27 @@ struct QueueBlock: View {
     let queue: [RetryItem]
     let now: Date
     var showProfile = false
+    var recentLimit = 2
     var retryAll: (() -> Void)?
     @EnvironmentObject var model: WatchModel
 
     var body: some View {
         let active = queue.filter { $0.isActive }
-        let recent = Array(queue.filter { !$0.isActive }.suffix(2))
+        let recent = Array(queue.filter { !$0.isActive }.suffix(recentLimit))
         let waiting = active.filter { $0.status == .waiting }.count
         if !active.isEmpty || !recent.isEmpty {
             VStack(alignment: .leading, spacing: 1) {
-                HStack {
-                    Text(title).foregroundStyle(.secondary)
-                    Spacer()
-                    if waiting >= 2, let retryAll {
-                        Button("Retry all", action: retryAll).buttonStyle(.link)
-                            .help("Send “continue” to all \(waiting) waiting chats now")
+                if !title.isEmpty || (waiting >= 2 && retryAll != nil) {
+                    HStack {
+                        Text(title).foregroundStyle(.secondary)
+                        Spacer()
+                        if waiting >= 2, let retryAll {
+                            Button("Retry all", action: retryAll).buttonStyle(.link)
+                                .help("Send “continue” to all \(waiting) waiting chats now")
+                        }
                     }
+                    .padding(.horizontal, 4)
                 }
-                .padding(.horizontal, 4)
                 ForEach(active + recent) { it in
                     QueueRow(it: it, now: now,
                              profile: showProfile ? (model.profile(it.profileId)?.name ?? it.profileId) : nil)
@@ -529,19 +657,23 @@ struct PopoverView: View {
 
                 Divider().padding(.top, 2)
                 HStack(spacing: 14) {
-                    Button(showStats ? "Hide stats" : "UI vs CLI stats") { showStats.toggle() }
+                    Button("Open Session Watch") { model.showMain() }
+                        .help("Open the main window")
+                    Button(showStats ? "Hide stats" : "Stats") { showStats.toggle() }
+                        .help("UI vs CLI retry stats")
                     Button("Config") { NSWorkspace.shared.open(Paths.config) }
                     Button("Logs") { NSWorkspace.shared.open(Paths.support) }
-                    Button("iPhone…") { NSApp.activate(); openWindow(id: "pair") }
+                    Button("iPhone…") { model.showMain(.iphone) }
                         .help("Pair the Session Watch iPhone app")
                     Spacer()
-                    Button("Quit") { model.bridge?.stop(); model.monitor.stop(); NSApp.terminate(nil) }
+                    Button("Quit") { model.quit() }
                 }
                 .buttonStyle(.link).font(Theme.monoSmall).padding(.top, 6)
             }
             .padding(12)
             .frame(width: 440)
         }
+        .capturesOpenWindow(model)
     }
 }
 
@@ -562,15 +694,62 @@ struct StatsView: View {
 
 // MARK: - App
 
+/// Lets AppKit callbacks open SwiftUI windows: stores the scene's `openWindow` in the model.
+private struct CaptureOpenWindow: ViewModifier {
+    let model: WatchModel
+    @Environment(\.openWindow) private var openWindow
+    func body(content: Content) -> some View {
+        content.onAppear { model.openWindowAction = openWindow }
+    }
+}
+
+extension View {
+    func capturesOpenWindow(_ model: WatchModel) -> some View { modifier(CaptureOpenWindow(model: model)) }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    var model: WatchModel { .shared }
+
+    func applicationWillFinishLaunching(_ n: Notification) {
+        // LSUIElement stays in Info.plist (no Dock flash when the Dock icon is off); this overrides it.
+        NSApp.setActivationPolicy(model.config.showInDock ? .regular : .accessory)
+    }
+
+    func applicationDidFinishLaunching(_ n: Notification) {
+        #if DEBUG
+        DevSnapshot.install()
+        #endif
+        // SwiftUI opens the main window as the first scene; make sure it's in front, also as an accessory app.
+        DispatchQueue.main.async { self.model.showMain() }
+    }
+
+    /// Finder, Spotlight, Dock click or `open` while running: show the main window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        model.showMain()
+        return false
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationWillTerminate(_ n: Notification) { model.shutdown() }
+}
+
 @main
 struct ClaudeWatchApp: App {
-    @StateObject private var model = WatchModel()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @StateObject private var model = WatchModel.shared
 
     var body: some Scene {
-        MenuBarExtra {
+        Window("Session Watch", id: MainWindow.id) {
+            MainWindow().environmentObject(model)
+        }
+        .defaultSize(width: 1040, height: 720)
+
+        MenuBarExtra(isInserted: Binding(get: { model.config.showInMenuBar },
+                                         set: { model.setShowInMenuBar($0) })) {
             PopoverView().environmentObject(model)
         } label: {
-            Text(model.label).monospacedDigit()
+            Text(model.label).monospacedDigit().capturesOpenWindow(model)
         }
         .menuBarExtraStyle(.window)
 
@@ -579,9 +758,8 @@ struct ClaudeWatchApp: App {
         }
         .defaultSize(width: 820, height: 560)
 
-        Window("Pair iPhone", id: "pair") {
-            PairingWindow().environmentObject(model)
+        Settings {
+            SettingsView().environmentObject(model).frame(width: 560, height: 640)
         }
-        .windowResizability(.contentSize)
     }
 }

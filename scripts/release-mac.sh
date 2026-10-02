@@ -13,7 +13,7 @@
 set -euo pipefail
 cd "${0:A:h}/.."
 
-VERSION="${VERSION:-0.2.0}"
+VERSION="${VERSION:-0.3.0}"
 BUILD="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}"
 BUNDLE_ID="${CLAUDE_WATCH_BUNDLE_ID:-dev.lajward.SessionWatch}"
 IDENTITY="${SIGN_IDENTITY:-Developer ID Application: Rashid Obaidi (6W5NJUTUCV)}"
@@ -36,7 +36,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
-  <key>CFBundleName</key><string>ClaudeWatch</string>
+  <key>CFBundleName</key><string>Session Watch</string>
   <key>CFBundleDisplayName</key><string>Session Watch</string>
   <key>CFBundleExecutable</key><string>ClaudeWatch</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>

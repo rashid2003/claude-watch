@@ -5,7 +5,9 @@ import WatchBridge
 import WatchCore
 
 /// "Pair iPhone…": a QR code the Session Watch iPhone app scans, plus the paired devices with Revoke.
+/// Shown as the main window's iPhone section (`embedded`).
 struct PairingWindow: View {
+    var embedded = false
     @EnvironmentObject var model: WatchModel
     @State private var payload: PairingPayload?
     @State private var opened = Date()
@@ -18,12 +20,15 @@ struct PairingWindow: View {
                 if let bridge = model.bridge {
                     content(bridge, now: ctx.date)
                 } else {
-                    Text("The iPhone bridge is off. Set \"bridgeEnabled\": true in the config and restart ClaudeWatch.")
+                    Text("The iPhone bridge is off. Turn it on in Settings › iPhone bridge, then restart Session Watch.")
                         .foregroundStyle(.secondary)
+                    if embedded { Button("Open Settings") { model.section = .settings } }
                 }
             }
             .padding(20)
-            .frame(width: 460)
+            .frame(width: embedded ? nil : 460)
+            .frame(maxWidth: embedded ? 640 : nil, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onAppear { refresh(); newCode() }
         .onDisappear { model.bridge?.server.pairing.close() }
@@ -50,7 +55,7 @@ struct PairingWindow: View {
                 if open, let payload {
                     Text(payload.code).font(.system(size: 30, weight: .semibold, design: .monospaced))
                     Text("Code expires in \(Int(left))s").foregroundStyle(.secondary).font(.caption)
-                    Text("Manual entry: \(payload.hosts.first ?? "127.0.0.1") · port \(payload.port)")
+                    Text("Manual entry: \(payload.hosts.first ?? "127.0.0.1") · port \(String(payload.port))")
                         .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 } else {
                     Text("The code expired or was used.").foregroundStyle(.secondary)
