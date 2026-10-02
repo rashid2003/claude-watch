@@ -6,3 +6,4 @@ xcuserdata/
 
 # The iPhone app project is hand-maintained and committed.
 !iOS/ClaudeRemote.xcodeproj/
+iOS/build/

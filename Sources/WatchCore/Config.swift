@@ -67,6 +67,8 @@ public struct Config: Codable, Sendable {
     /// Prevent idle sleep while a phone is paired, so it can reach the Mac.
     public var keepAwakeWhenPaired: Bool = false
     public var keepAwakeOnlyOnAC: Bool = true
+    /// Only accept phones signed into the same Tailscale account as this Mac (`tailscale whois`).
+    public var requireTailnetOwner: Bool = true
 
     public init() {}
 
@@ -88,6 +90,7 @@ public struct Config: Codable, Sendable {
         bridgePort = try c.decodeIfPresent(Int.self, forKey: .bridgePort) ?? d.bridgePort
         keepAwakeWhenPaired = try c.decodeIfPresent(Bool.self, forKey: .keepAwakeWhenPaired) ?? d.keepAwakeWhenPaired
         keepAwakeOnlyOnAC = try c.decodeIfPresent(Bool.self, forKey: .keepAwakeOnlyOnAC) ?? d.keepAwakeOnlyOnAC
+        requireTailnetOwner = try c.decodeIfPresent(Bool.self, forKey: .requireTailnetOwner) ?? d.requireTailnetOwner
     }
 
     public func retryMode(for profileId: String) -> RetryMode {

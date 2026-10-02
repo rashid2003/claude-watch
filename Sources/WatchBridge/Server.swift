@@ -77,6 +77,8 @@ public final class BridgeServer: @unchecked Sendable {
     /// Addresses currently listened on.
     public private(set) var boundHosts: [String] = []
     public private(set) var lastError: String?
+    /// Extra check for non-loopback peers (the Tailscale owner check); nil admits every tailnet address.
+    public var peerCheck: ((String) -> Bool)?
 
     private let hosts: () -> [String]
     private let queue = DispatchQueue(label: "claude-watch.bridge")
@@ -225,6 +227,16 @@ public final class BridgeServer: @unchecked Sendable {
             c.cancel()
             return
         }
+        let h = "\(host)"
+        guard let check = peerCheck, !PeerFilter.isLoopback(h) else { return admit(c) }
+        // `tailscale whois` takes a moment; don't hold up the server queue for it.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let ok = check(h)
+            self?.queue.async { if ok { self?.admit(c) } else { c.cancel() } }
+        }
+    }
+
+    private func admit(_ c: NWConnection) {
         let conn = Conn(c)
         conn.server = self
         conns[ObjectIdentifier(conn)] = conn

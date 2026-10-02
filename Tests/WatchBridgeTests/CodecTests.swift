@@ -154,3 +154,46 @@ final class JobsTests: XCTestCase {
         XCTAssertEqual(log.last?.text, "stop failed · iPhone")
     }
 }
+
+final class TailnetOwnerTests: XCTestCase {
+    let status = Data(#"{"Self":{"UserID":42,"DNSName":"mac.tail1.ts.net."},"User":{"42":{"LoginName":"rashid@lajward.dev"}}}"#.utf8)
+
+    func whois(_ login: String) -> Data { Data(#"{"UserProfile":{"LoginName":"\#(login)"}}"#.utf8) }
+
+    func testAllowsOnlyTheMacsOwner() {
+        var calls: [[String]] = []
+        let owner = TailnetOwner { args in
+            calls.append(args)
+            if args.first == "status" { return self.status }
+            return args.last == "100.64.0.2" ? self.whois("Rashid@lajward.dev") : self.whois("someone@else.com")
+        }
+        XCTAssertTrue(owner.allows("100.64.0.2"))
+        XCTAssertFalse(owner.allows("100.64.0.3"))
+        XCTAssertNotNil(owner.lastRefused)
+        XCTAssertTrue(owner.allows("100.64.0.2"), "cached")
+        XCTAssertEqual(calls.filter { $0.first == "whois" }.count, 2)
+        XCTAssertEqual(calls.filter { $0.first == "status" }.count, 1)
+    }
+
+    func testTaggedAndUnknownDevicesAreRefused() {
+        let owner = TailnetOwner { $0.first == "status" ? self.status : ($0.last == "100.64.0.9" ? nil : self.whois("tagged-devices")) }
+        XCTAssertFalse(owner.allows("100.64.0.8"))
+        XCTAssertFalse(owner.allows("100.64.0.9"))
+    }
+
+    func testWithoutTheCLIFallsBackToAddressAndToken() {
+        let owner = TailnetOwner { _ in nil }
+        XCTAssertTrue(owner.allows("fd7a:115c:a1e0::5%utun4"))
+        XCTAssertTrue(owner.unavailable)
+    }
+
+    func testRetriesARefusedPeerAfterThirtySeconds() {
+        var login = "someone@else.com"
+        let owner = TailnetOwner { $0.first == "status" ? self.status : self.whois(login) }
+        let t = Date()
+        XCTAssertFalse(owner.allows("100.64.0.2", now: t))
+        login = "rashid@lajward.dev"
+        XCTAssertFalse(owner.allows("100.64.0.2", now: t.addingTimeInterval(10)))
+        XCTAssertTrue(owner.allows("100.64.0.2", now: t.addingTimeInterval(31)))
+    }
+}

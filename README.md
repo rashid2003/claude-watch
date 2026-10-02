@@ -119,7 +119,8 @@ ClaudeWatch.app. From the phone you can:
 
 **Reaching the Mac.** The bridge listens on port 7433, but only on the Mac's
 [Tailscale](https://tailscale.com) addresses and `127.0.0.1`. Other peers are
-dropped before any HTTP is read. Install Tailscale on the Mac and on the iPhone,
+dropped before any HTTP is read. Devices signed into a different Tailscale account
+than the Mac are refused too (`"requireTailnetOwner": true`, using `tailscale whois`). Install Tailscale on the Mac and on the iPhone,
 signed into the same tailnet, and the phone reaches the Mac from anywhere.
 
 **Pairing.**

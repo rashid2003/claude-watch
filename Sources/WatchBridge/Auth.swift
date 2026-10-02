@@ -137,11 +137,18 @@ public final class PairingGate: @unchecked Sendable {
 
 /// Which peers may connect: loopback and the Tailscale ranges.
 public enum PeerFilter {
+    public static func isLoopback(_ host: String) -> Bool {
+        var h = host
+        if let pct = h.firstIndex(of: "%") { h = String(h[..<pct]) }
+        if h.hasPrefix("::ffff:") { h = String(h.dropFirst(7)) }
+        return h == "127.0.0.1" || h == "::1" || h == "localhost"
+    }
+
     public static func allowed(_ host: String) -> Bool {
         var h = host
         if let pct = h.firstIndex(of: "%") { h = String(h[..<pct]) }   // IPv6 zone
         if h.hasPrefix("::ffff:") { h = String(h.dropFirst(7)) }
-        if h == "127.0.0.1" || h == "::1" || h == "localhost" { return true }
+        if isLoopback(h) { return true }
         var v4 = in_addr()
         if inet_pton(AF_INET, h, &v4) == 1 {
             let a = UInt32(bigEndian: v4.s_addr)
@@ -179,22 +186,86 @@ public enum TailscaleAddresses {
 
     /// The MagicDNS name of this Mac, e.g. "rashids-mac.tail1234.ts.net", if the CLI knows it.
     public static func magicDNSName() -> String? {
-        for path in ["/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale",
-                     "/Applications/Tailscale.app/Contents/MacOS/Tailscale"] where FileManager.default.isExecutableFile(atPath: path) {
+        guard let data = TailscaleCLI.run(["status", "--self", "--json"]),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let me = obj["Self"] as? [String: Any], let name = me["DNSName"] as? String, !name.isEmpty else { return nil }
+        return name.hasSuffix(".") ? String(name.dropLast()) : name
+    }
+}
+
+public enum TailscaleCLI {
+    static let paths = ["/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale",
+                        "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
+
+    /// Runs the tailscale CLI; nil when it isn't installed or the command fails.
+    public static func run(_ args: [String]) -> Data? {
+        for path in paths where FileManager.default.isExecutableFile(atPath: path) {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: path)
-            p.arguments = ["status", "--self", "--json"]
+            p.arguments = args
             let pipe = Pipe()
             p.standardOutput = pipe
             p.standardError = FileHandle.nullDevice
             guard (try? p.run()) != nil else { continue }
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             p.waitUntilExit()
-            if let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-               let me = obj["Self"] as? [String: Any], let name = me["DNSName"] as? String, !name.isEmpty {
-                return name.hasSuffix(".") ? String(name.dropLast()) : name
-            }
+            return p.terminationStatus == 0 ? data : nil
         }
         return nil
+    }
+}
+
+/// Only devices signed into the same Tailscale account as this Mac may connect
+/// (a shared node or another user's device on the tailnet can't). Answers are cached per peer IP.
+public final class TailnetOwner: @unchecked Sendable {
+    private let run: ([String]) -> Data?
+    private let lock = NSLock()
+    private var peers: [String: (ok: Bool, at: Date)] = [:]
+    private var owner: (login: String?, at: Date)?
+    /// The CLI couldn't tell us who owns this Mac; peers are let through on address + token alone.
+    public private(set) var unavailable = false
+    public private(set) var lastRefused: String?
+
+    public init(run: @escaping ([String]) -> Data? = TailscaleCLI.run) { self.run = run }
+
+    public func allows(_ host: String, now: Date = Date()) -> Bool {
+        var ip = host
+        if let pct = ip.firstIndex(of: "%") { ip = String(ip[..<pct]) }
+        if ip.hasPrefix("::ffff:") { ip = String(ip.dropFirst(7)) }
+        if let c = lock.withLock({ peers[ip] }), now.timeIntervalSince(c.at) < (c.ok ? 600 : 30) { return c.ok }
+        guard let me = ownerLogin(now) else {
+            lock.withLock { unavailable = true }
+            return true
+        }
+        let them = run(["whois", "--json", ip]).flatMap(Self.peerLogin)
+        let ok = them?.caseInsensitiveCompare(me) == .orderedSame
+        lock.withLock {
+            unavailable = false
+            peers[ip] = (ok, now)
+            if !ok { lastRefused = "Refused \(ip) (\(them ?? "unknown device")): not signed into \(me) on Tailscale" }
+        }
+        return ok
+    }
+
+    private func ownerLogin(_ now: Date) -> String? {
+        if let o = lock.withLock({ owner }), now.timeIntervalSince(o.at) < 600 { return o.login }
+        let login = run(["status", "--self", "--json"]).flatMap(Self.selfLogin)
+        lock.withLock { owner = (login, now) }
+        return login
+    }
+
+    /// `tailscale status --self --json` → the login name of this Mac's user.
+    static func selfLogin(_ data: Data) -> String? {
+        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let me = obj["Self"] as? [String: Any], let uid = me["UserID"] as? NSNumber,
+              let users = obj["User"] as? [String: Any], let u = users[uid.stringValue] as? [String: Any] else { return nil }
+        return u["LoginName"] as? String
+    }
+
+    /// `tailscale whois --json <ip>` → the login name of that device's user ("tagged-devices" for tagged nodes).
+    static func peerLogin(_ data: Data) -> String? {
+        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let u = obj["UserProfile"] as? [String: Any] else { return nil }
+        return u["LoginName"] as? String
     }
 }

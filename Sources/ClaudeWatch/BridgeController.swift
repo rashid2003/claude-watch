@@ -28,6 +28,9 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
 
     static var version: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev" }
 
+    /// Refuses tailnet peers that aren't signed into this Mac's Tailscale account.
+    let owner = TailnetOwner()
+
     init(monitor: Monitor) {
         self.monitor = monitor
         let cfg = monitor.config
@@ -38,6 +41,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         let tool = Self.cliPath()
         runner = HeadlessRunner(promptTool: { sid in tool.map { [$0, "prompt-tool", "--socket", socket, "--session", sid] } })
         server.handler = self
+        if cfg.requireTailnetOwner { server.peerCheck = { [owner] in owner.allows($0) } }
         server.onDevicesChanged = { [weak self] in self?.devicesChanged() }
         server.pairing.onClose = { [weak self] in DispatchQueue.main.async { self?.onChange?() } }
         broker.describe = { [weak self] id in
@@ -125,6 +129,10 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         if let e = pusher.lastError { w.append(e) }
         if TailscaleAddresses.current().isEmpty { w.append("Tailscale isn't connected on the Mac; only this Mac can reach the bridge.") }
         if let e = server.lastError { w.append(e) }
+        if monitor.config.requireTailnetOwner && owner.unavailable {
+            w.append("The Tailscale CLI isn't available, so the bridge can't check that connecting devices are yours.")
+        }
+        if let r = owner.lastRefused { w.append(r) }
         let profiles = lock.withLock { latest }?.profiles ?? []
         let noToken = profiles.filter { TokenStore.get($0.id) == nil }.map(\.name)
         if !noToken.isEmpty {

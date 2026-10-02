@@ -361,11 +361,11 @@ iOS/ClaudeRemote.xcodeproj    iOS app, depends on WatchProtocol via local path
   snapshot when it changes, about 20–60 KB at most once per poll.
   `prompt` events are folded into the snapshot's `prompts`.
 - **WebSocket client messages** are `{"type":"subscribe|unsubscribe|ping","chatId":…}`.
-- **Tailscale owner check** (`requireTailnetOwner`) is deferred. The listener
-  still accepts only tailnet and loopback peers, and every request needs a
-  paired token.
-- **Per-item Retry now** falls back to retrying the whole account until the
-  per-chat retry API from the move-chat branch lands.
+- **Tailscale owner check** (`requireTailnetOwner`, default on) runs `tailscale whois`
+  in the background before admitting a non-loopback peer. Allowed answers are cached
+  10 min and refused ones 30 s. Tagged and unknown devices are refused. Without the CLI
+  it falls back to address range plus token, and `/v1/status` warns.
+- **Per-item Retry now** uses `RetryEngine.request(.item)` from the move-chat branch.
 
 ## Out of scope for v1
 
