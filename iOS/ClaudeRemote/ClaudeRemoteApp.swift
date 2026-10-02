@@ -65,7 +65,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         Theme.applyAppearance()
         UNUserNotificationCenter.current().delegate = self
         Notifications.registerCategories()
+        if !Self.isDemo { store.live.registerBackgroundRefresh() }
         return true
+    }
+
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        if !Self.isDemo { store.live.scheduleRefresh() }
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {

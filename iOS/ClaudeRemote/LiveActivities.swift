@@ -1,4 +1,5 @@
 import ActivityKit
+import BackgroundTasks
 import Foundation
 import Observation
 import WatchProtocol
@@ -67,7 +68,10 @@ final class LiveActivities {
 
     /// Feed every snapshot here.
     func update(_ snap: Snapshot, macName: String, now: Date = Date()) {
-        let limits = LiveLimits(snap)
+        update(LiveLimits(snap), macName: macName, now: now)
+    }
+
+    func update(_ limits: LiveLimits, macName: String, now: Date = Date()) {
         latest = (limits, macName)
         if lastWidget.map({ $0.state.comparable != limits.comparable || now.timeIntervalSince($0.at) > 900 }) ?? true,
            now.timeIntervalSince(lastWidget?.at ?? .distantPast) > Self.widgetInterval {
@@ -98,6 +102,35 @@ final class LiveActivities {
             sentTokens = [:]
             Task { for a in LimitsActivity.activities { await a.end(nil, dismissalPolicy: .immediate) } }
         }
+    }
+
+    // MARK: Background refresh
+
+    /// A fallback for when the Mac can't push (no APNs key set up there): every so often iOS wakes the app,
+    /// which asks the Mac directly and refreshes the activity and the widgets.
+    static let refreshTask = "dev.lajward.SessionWatch.refresh"
+
+    func registerBackgroundRefresh() {
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshTask, using: nil) { [weak self] task in
+            Task { @MainActor in
+                self?.scheduleRefresh()
+                let work = Task { @MainActor in
+                    guard let self, let link = WidgetShare.Link.load(), let fresh = await link.fetch() else { return false }
+                    self.lastWidget = nil
+                    self.update(fresh, macName: link.macName)
+                    return true
+                }
+                task.expirationHandler = { work.cancel() }
+                task.setTaskCompleted(success: await work.value)
+            }
+        }
+    }
+
+    func scheduleRefresh() {
+        guard WidgetShare.Link.load() != nil else { return }
+        let r = BGAppRefreshTaskRequest(identifier: Self.refreshTask)
+        r.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+        try? BGTaskScheduler.shared.submit(r)
     }
 
     // MARK: Private
