@@ -181,8 +181,11 @@ public struct PairingPayload: Codable, Sendable, Equatable {
     public var hosts: [String]      // MagicDNS name first, then tailnet IPs
     public var port: Int
     public var code: String
-    public init(v: Int = 1, macName: String, hosts: [String], port: Int, code: String) {
-        self.v = v; self.macName = macName; self.hosts = hosts; self.port = port; self.code = code
+    /// v2: set when the Mac also listens through the relay.
+    public var relay: RelayInfo?
+    public init(macName: String, hosts: [String], port: Int, code: String, relay: RelayInfo? = nil) {
+        self.v = relay == nil ? 1 : 2
+        self.macName = macName; self.hosts = hosts; self.port = port; self.code = code; self.relay = relay
     }
 }
 
