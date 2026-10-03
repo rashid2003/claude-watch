@@ -125,6 +125,14 @@ dropped before any HTTP is read. Devices signed into a different Tailscale accou
 than the Mac are refused too (`"requireTailnetOwner": true`, using `tailscale whois`). Install Tailscale on the Mac and on the iPhone,
 signed into the same tailnet, and the phone reaches the Mac from anywhere.
 
+**Or through the relay.** Without Tailscale, the phone can go through the Session Watch relay
+(`wss://relay.sessionwatch.lajward.co`, a Cloudflare Worker in [`relay/`](relay/)).
+- Both the Mac and the phone dial out to the relay, so nothing has to be opened on either side.
+- Each connection is end-to-end encrypted with a key pinned in the pairing QR. The relay only ever passes ciphertext.
+- On the Mac, the relay is on by default: Settings → **Connect through relay**, or `"relayEnabled"` / `"relayURL"` in the config.
+- On the phone, the Mac tab chooses **auto** (Tailscale first, then the relay), **direct** or **relay**.
+- Phones paired before the relay existed need to pair again.
+
 **Pairing.**
 1. In the menu, click **iPhone…**. This shows a QR code and a 6-digit code.
 2. In Session Watch on the iPhone, tap **Pair** and scan the QR code, or enter the host, port
