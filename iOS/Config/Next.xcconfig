@@ -1,0 +1,11 @@
+// Session Watch Next for iPhone: installs next to the TestFlight app and pairs with the Mac's
+// "Session Watch Next" (VARIANT=next scripts/release-mac.sh, port 7434, its own relay room).
+// Used by VARIANT=next iOS/scripts/release.sh, or by hand: xcodebuild … -xcconfig Config/Next.xcconfig
+//
+// Bundle ids follow SW_APP_ID: the app is dev.lajward.SessionWatch.next, the widgets extension
+// dev.lajward.SessionWatch.next.Widgets, and its keychain groups <team>.dev.lajward.SessionWatch.next(.shared),
+// so its pairing and widget data never mix with the main app's.
+
+SW_APP_ID = dev.lajward.SessionWatch.next
+SW_DISPLAY_NAME = Session Watch Next
+SW_DEFAULT_PORT = 7434
