@@ -66,7 +66,7 @@ struct LiveWorkPanel: View {
                 Text(summary)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)   // keep "5 agents · 3 shells" whole; the tool name can go
                 Spacer(minLength: 4)
                 if let since { elapsed(now.timeIntervalSince(since)) }
                 Group {

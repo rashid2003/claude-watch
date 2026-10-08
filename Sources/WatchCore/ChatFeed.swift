@@ -111,6 +111,10 @@ struct ChatParser {
         let head = line.prefix(2048)
         let isUser = head.range(of: Data("\"type\":\"user\"".utf8)) != nil
         let isAssistant = head.range(of: Data("\"type\":\"assistant\"".utf8)) != nil
+        if !isUser && !isAssistant && WorkTracker.isWorkAttachment(head) {
+            if let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] { work.consume(obj) }
+            return []
+        }
         guard isUser || isAssistant || line.count > 2048 else { return [] }
 
         if line.count > 262_144 {

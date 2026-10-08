@@ -145,4 +145,37 @@ final class WorkTrackerTests: XCTestCase {
         XCTAssertEqual(WorkTracker.label(tool: "Bash", input: ["command": "swift test\nmore"]), "Bash: swift test")
         XCTAssertEqual(WorkTracker.label(tool: "Read", input: ["file_path": "/a/App.swift"]), "Read App.swift")
     }
+
+    /// Notifications that arrive mid-turn are written as `queued_command` attachments, and task
+    /// status changes as `task_status` attachments, not as user entries.
+    func testMidTurnNotificationsEndAgentsAndShells() throws {
+        func j(_ o: [String: Any]) -> Data { try! JSONSerialization.data(withJSONObject: o) }
+        let ts = "2026-10-08T10:00:01.000Z"
+        let lines: [Data] = [
+            j(["type": "assistant", "timestamp": ts, "message": ["content": [
+                ["type": "tool_use", "id": "tu_a", "name": "Agent", "input": ["description": "Build it", "prompt": "x", "run_in_background": true]],
+                ["type": "tool_use", "id": "tu_b", "name": "Bash", "input": ["command": "make", "description": "Make", "run_in_background": true]],
+            ]]]),
+            j(["type": "user", "timestamp": ts, "message": ["content": [["type": "tool_result", "tool_use_id": "tu_a", "content": "launched"]]],
+               "toolUseResult": ["isAsync": true, "status": "async_launched", "agentId": "ag1"]]),
+            j(["type": "user", "timestamp": ts, "message": ["content": [["type": "tool_result", "tool_use_id": "tu_b", "content": "bg"]]],
+               "toolUseResult": ["backgroundTaskId": "sh1"]]),
+        ]
+        var feed = ChatParser()
+        for l in lines { _ = feed.consume(l) }
+        var w = feed.work.live(now: t0.addingTimeInterval(5))
+        XCTAssertEqual(w.agents.filter { $0.status == .running }.count, 1)
+        XCTAssertEqual(w.shells.filter { $0.status == .running }.count, 1)
+
+        let queued = j(["isSidechain": false, "attachment": ["type": "queued_command",
+            "prompt": "<task-notification>\n<task-id>ag1</task-id>\n<tool-use-id>tu_a</tool-use-id>\n<status>completed</status>\n</task-notification>"],
+            "type": "attachment", "timestamp": ts])
+        let status = j(["isSidechain": false, "attachment": ["type": "task_status", "taskId": "sh1", "status": "failed"],
+            "type": "attachment", "timestamp": ts])
+        _ = feed.consume(queued)
+        _ = feed.consume(status)
+        w = feed.work.live(now: t0.addingTimeInterval(6))
+        XCTAssertTrue(w.agents.allSatisfy { $0.status == .done })
+        XCTAssertEqual(w.shells.map(\.status), [.failed])
+    }
 }

@@ -61,7 +61,26 @@ public struct WorkTracker: Codable, Sendable {
                 default: continue
                 }
             }
+        } else if type == "attachment", let a = obj["attachment"] as? [String: Any] {
+            switch a["type"] as? String {
+            case "queued_command":
+                // Notifications that land mid-turn are queued as commands rather than user entries.
+                if let p = a["prompt"] as? String { userNotification(p, at: at) }
+            case "task_status":
+                if let id = a["taskId"] as? String, let s = a["status"] as? String, s != "running", s != "pending" {
+                    end([id], status: Self.status(s), at: at)
+                }
+            default: break
+            }
         }
+    }
+
+    /// Attachment kinds `consume` reads besides user and assistant entries.
+    private static let attachmentKinds = [#""queued_command""#, #""task_status""#].map { Data($0.utf8) }
+
+    /// Cheap check on a raw line's first bytes: an attachment that `consume` reads.
+    static func isWorkAttachment(_ head: Data) -> Bool {
+        head.range(of: Data(#""attachment":{"#.utf8)) != nil && attachmentKinds.contains { head.range(of: $0) != nil }
     }
 
     /// A tool_result seen without parsing its line (huge results): only the id and error flag.
@@ -153,6 +172,11 @@ public struct WorkTracker: Codable, Sendable {
         }
     }
 
+    private mutating func userNotification(_ raw: String, at: Date) {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.hasPrefix("<task-notification>") { notification(t, at: at) }
+    }
+
     private mutating func userText(_ raw: String, at: Date) {
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.hasPrefix("<task-notification>") { return notification(t, at: at) }
@@ -165,11 +189,7 @@ public struct WorkTracker: Codable, Sendable {
     /// Monitor events carry no status and leave the monitor running.
     private mutating func notification(_ t: String, at: Date) {
         guard let status = Self.tags("status", in: t).first else { return }
-        let s: LiveWork.Status = switch status {
-        case "completed": .done
-        case "failed": .failed
-        default: .stopped
-        }
+        let s = Self.status(status)
         let ids = Self.tags("task-id", in: t) + Self.tags("tool-use-id", in: t)
         end(ids, status: s, at: at)
         if let n = Self.tags("tool_uses", in: t).first.flatMap(Int.init) {
@@ -177,6 +197,14 @@ public struct WorkTracker: Codable, Sendable {
                 let key = agentIds[id] ?? id
                 if let i = agents.firstIndex(where: { $0.id == key }) { agents[i].steps = max(agents[i].steps, n) }
             }
+        }
+    }
+
+    static func status(_ s: String) -> LiveWork.Status {
+        switch s {
+        case "completed": .done
+        case "failed": .failed
+        default: .stopped
         }
     }
 

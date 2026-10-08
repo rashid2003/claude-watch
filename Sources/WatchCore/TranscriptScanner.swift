@@ -59,7 +59,7 @@ struct FileScanState: Codable {
 }
 
 struct ScanCache: Codable {
-    var version = 2
+    var version = 3   // 3: FileScanState.work (live work), so old caches rescan once
     var files: [String: FileScanState] = [:]
     var buckets: [String: TokenBuckets] = [:]   // keyed by desktop session id
 }
@@ -79,7 +79,7 @@ public final class TranscriptScanner {
         self.cacheURL = cacheURL
         self.projectsDir = projectsDir
         if let data = try? Data(contentsOf: cacheURL),
-           let c = try? JSONCoder.decoder.decode(ScanCache.self, from: data), c.version == 2 {
+           let c = try? JSONCoder.decoder.decode(ScanCache.self, from: data), c.version == 3 {
             cache = c
         } else {
             cache = ScanCache()
@@ -220,7 +220,14 @@ public final class TranscriptScanner {
             || (line.count < 65536 && line.range(of: Data("\"type\":\"assistant\"".utf8)) != nil)
         let isUser = !isAssistant && (head.range(of: Data("\"type\":\"user\"".utf8)) != nil
             || (line.count < 65536 && line.range(of: Data("\"type\":\"user\"".utf8)) != nil))
-        guard isAssistant || isUser else { return }
+        guard isAssistant || isUser else {
+            if st.isMain, WorkTracker.isWorkAttachment(head),
+               let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] {
+                if st.work == nil { st.work = WorkTracker() }
+                st.work?.consume(obj)
+            }
+            return
+        }
 
         if isUser && line.count > 262_144 {
             // Huge tool results: skip full parse, classify cheaply.
