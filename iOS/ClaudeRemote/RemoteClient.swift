@@ -62,9 +62,11 @@ actor RemoteClient {
         let session = makeSession(timeout: 6)
         let body = try WireCoder.encoder.encode(PairRequest(code: code, deviceName: deviceName))
         var lastError: Error = RemoteError.unreachable("")
-        // Direct hosts first, then (index == urls.count) the relay.
-        for i in 0..<(urls.count + (relay == nil ? 0 : 1)) {
-            let viaRelay = i == urls.count
+        // The relay first (index 0) when the QR has one, then the direct hosts.
+        let offset = relay == nil ? 0 : 1
+        for n in 0..<(urls.count + offset) {
+            let viaRelay = n < offset
+            let i = n - offset
             let url: URL
             if viaRelay, let relay {
                 do { url = try await RelayProxy.shared.baseURL(for: relay) } catch {
@@ -84,7 +86,7 @@ actor RemoteClient {
                 var ordered = urls
                 if !viaRelay { ordered.insert(ordered.remove(at: i), at: 0) }
                 return Credentials(baseURLs: ordered, token: r.token, deviceId: r.deviceId, macName: r.macName,
-                                   relay: relay, preferRelay: viaRelay ? true : nil)
+                                   relay: relay)
             } catch let e as RemoteError {
                 throw e
             } catch {
@@ -218,10 +220,10 @@ actor RemoteClient {
     private func candidates() -> [Candidate] {
         let direct = credentials.baseURLs.map(Candidate.direct)
         guard let relay = credentials.relay else { return direct }
-        switch credentials.via ?? .auto {
+        switch credentials.via ?? .preferred {
         case .direct: return direct
         case .relay: return [.relay(relay)]
-        case .auto: return credentials.preferRelay == true ? [.relay(relay)] + direct : direct + [.relay(relay)]
+        case .auto: return [.relay(relay)] + direct
         }
     }
 
@@ -230,10 +232,8 @@ actor RemoteClient {
         case .direct(let url):
             path = .direct
             promote(url)
-            if credentials.preferRelay == true { credentials.preferRelay = nil; Keychain.save(credentials) }
         case .relay:
             path = .relay
-            if credentials.preferRelay != true { credentials.preferRelay = true; Keychain.save(credentials) }
         }
     }
 

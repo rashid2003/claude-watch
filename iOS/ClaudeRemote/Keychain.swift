@@ -11,15 +11,16 @@ struct Credentials: Codable, Equatable, Sendable {
     var macName: String
     /// The Mac's relay room and key, when it was paired with the relay on (QR v2).
     var relay: RelayInfo?
-    /// How to reach the Mac; nil = auto.
+    /// How to reach the Mac; nil = `ConnectVia.preferred` (the relay).
     var via: ConnectVia?
-    /// Auto: the relay answered last time, so try it before the direct hosts.
-    var preferRelay: Bool?
 }
 
 /// Direct = Tailscale / local network to the Mac's bridge; relay = through relay.sessionwatch.lajward.co.
 enum ConnectVia: String, Codable, CaseIterable, Sendable {
-    case auto, direct, relay
+    case relay, auto, direct
+
+    /// The relay unless the user picked otherwise; Tailscale is opt-in.
+    static let preferred: ConnectVia = .relay
 }
 
 /// The pairing record, stored as JSON in one generic-password item. Readable after the first unlock
