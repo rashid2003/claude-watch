@@ -1,27 +1,46 @@
 import SwiftUI
 import WatchProtocol
 
-/// Starts a chat in an account's desktop window on the Mac.
+/// Starts a chat in an account's desktop window on the Mac. The account, folder and prompt are kept as
+/// a draft until the chat starts, so closing the sheet loses nothing.
 struct NewChatView: View {
     @Environment(RemoteStore.self) private var store
     @Environment(AppLock.self) private var lock
     @Environment(\.dismiss) private var dismiss
 
-    @State private var profileId: String = ""
-    @State private var cwd = ""
-    @State private var prompt = ""
+    @AppStorage("newChat.profile") private var profileId = ""
+    @AppStorage("newChat.folder") private var cwd = ""
+    @AppStorage("newChat.prompt") private var prompt = ""
     @State private var folders: [FolderSuggestion] = []
     @State private var loadingFolders = false
+    @State private var showAllFolders = false
+    @State private var checked: (path: String, result: FolderCheck?)?
+    @State private var starting = false
     @FocusState private var focus: Field?
 
     private enum Field { case folder, prompt }
 
+    /// What the Mac says about the folder in the field.
+    enum FolderState: Equatable { case empty, checking, missing, untrusted, trusted, unknown }
+
+    /// The desktop app cuts a linked prompt here.
+    static let promptLimit = 14_000
+
     private var accounts: [AccountStatus] { store.snapshot?.accounts ?? [] }
-    private var starting: Bool { store.isPending(Keys.newChat) }
+    private var folder: String { cwd.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var promptText: String { prompt.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var folderState: FolderState {
+        guard !folder.isEmpty else { return .empty }
+        if let f = folders.first(where: { $0.cwd == folder }), let t = f.trusted { return t ? .trusted : .untrusted }
+        guard let checked, checked.path == folder else { return .checking }
+        guard let r = checked.result else { return .unknown }
+        return !r.exists ? .missing : r.trusted ? .trusted : .untrusted
+    }
+
     private var canStart: Bool {
-        store.canSend && !starting && !profileId.isEmpty
-            && !cwd.trimmingCharacters(in: .whitespaces).isEmpty
-            && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        store.canSend && !starting && accounts.contains { $0.id == profileId } && !promptText.isEmpty
+            && promptText.count <= Self.promptLimit && [.trusted, .untrusted, .unknown].contains(folderState)
     }
 
     var body: some View {
@@ -29,78 +48,18 @@ struct NewChatView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     ConnectionBanner().padding(.top, 8)
-                    SectionTitle("account")
-                    ForEach(accounts) { a in accountRow(a) }
-
+                    accountSection
                     Divider().padding(.top, 8)
-                    SectionTitle("folder") {
-                        if loadingFolders { ProgressView().controlSize(.mini) }
-                    }
-                    TextField("/Users/you/Project", text: $cwd)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .focused($focus, equals: .folder)
-                        .fieldBox(focused: focus == .folder)
-                    ForEach(folders.prefix(8)) { f in
-                        Button {
-                            cwd = f.cwd
-                        } label: {
-                            HStack(spacing: 6) {
-                                Text(cwd == f.cwd ? "●" : "▸").foregroundStyle(Theme.clay).fixedSize()
-                                Text(Fmt.folderName(f.cwd)).lineLimit(1).layoutPriority(1)
-                                // The "·" stays put: only the path itself is cut, from the front.
-                                Text("·").foregroundStyle(.tertiary)
-                                Text(f.cwd).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
-                                Spacer(minLength: 4)
-                                Text(Fmt.relativeAgo(f.lastUsedAt)).foregroundStyle(.secondary).fixedSize()
-                            }
-                            .font(Theme.monoSmall)
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 4)
-                            .background(RoundedRectangle(cornerRadius: 5).fill(cwd == f.cwd ? Theme.highlight : .clear))
-                            .animation(.snappy, value: cwd)
-                        }
-                        .buttonStyle(.row)
-                        .foregroundStyle(.primary)
-                    }
-
+                    folderSection
                     Divider().padding(.top, 8)
-                    SectionTitle("prompt")
-                    TextEditor(text: $prompt)
-                        .font(Theme.mono)
-                        .scrollContentBackground(.hidden)
-                        .frame(minHeight: 140)
-                        .focused($focus, equals: .prompt)
-                        .overlay(alignment: .topLeading) {
-                            if prompt.isEmpty {
-                                Text("what should claude do?")
-                                    .font(Theme.mono)
-                                    .foregroundStyle(.tertiary)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 8)
-                                    .allowsHitTesting(false)
-                            }
-                        }
-                        .padding(4)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.code))
-                        .overlay(RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(focus == .prompt ? Theme.clay : Theme.hairline))
-
-                    HStack {
-                        Spacer()
-                        if starting {
-                            LoadingLine(text: "starting…").frame(minHeight: 44)
-                        } else {
-                            Button("↵ start") { start() }
-                                .buttonStyle(.clay)
-                                .disabled(!canStart)
-                        }
-                    }
-                    .padding(.top, 14)
+                    promptSection
+                    startRow.padding(.top, 14)
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
+                .disabled(starting)
             }
+            .scrollDismissesKeyboard(.interactively)
             .screenBackground()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -112,27 +71,49 @@ struct NewChatView: View {
                     .font(Theme.monoTitle)
                 }
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("cancel") { dismiss() }.buttonStyle(LinkButtonStyle(color: .secondary, font: Theme.mono))
+                    Button { dismiss() } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("Close")
+                        .disabled(starting)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if starting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button { start() } label: { Image(systemName: "arrow.up") }
+                            .accessibilityLabel(folderState == .untrusted ? "Trust and start" : "Start")
+                            .disabled(!canStart)
+                    }
                 }
             }
             .task(id: profileId) { await loadFolders() }
-            .onAppear {
-                if profileId.isEmpty {
-                    profileId = (accounts.first { $0.state == .free } ?? accounts.first)?.id ?? ""
-                }
-            }
+            .task(id: folder) { await checkFolder() }
+            .onAppear(perform: pickAccount)
+            .onChange(of: accounts.map(\.id)) { pickAccount() }
         }
         .tint(Theme.clay)
+        .toast()
+        .interactiveDismissDisabled(starting)
+    }
+
+    // MARK: Account
+
+    @ViewBuilder private var accountSection: some View {
+        SectionTitle("account")
+        if accounts.isEmpty {
+            LoadingLine(text: "waiting for your mac…").frame(minHeight: 44)
+        }
+        ForEach(accounts) { a in accountRow(a) }
     }
 
     private func accountRow(_ a: AccountStatus) -> some View {
-        Button {
+        let on = profileId == a.id
+        return Button {
             profileId = a.id
         } label: {
             HStack(spacing: 6) {
-                Text(profileId == a.id ? "●" : "○").foregroundStyle(profileId == a.id ? Theme.clay : .secondary).fixedSize()
+                Text(on ? "●" : "○").foregroundStyle(on ? Theme.clay : .secondary).fixedSize()
                 Circle().fill(Theme.color(a.state)).frame(width: 7, height: 7)
-                Text(a.profile.name).fontWeight(profileId == a.id ? .semibold : .regular)
+                Text(a.profile.name).fontWeight(on ? .semibold : .regular)
                     .lineLimit(1).truncationMode(.middle).layoutPriority(1)
                 Text("· 5h " + Fmt.percent(a.fiveHour.percent)).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 4)
@@ -141,12 +122,159 @@ struct NewChatView: View {
             .font(Theme.mono)
             .padding(.vertical, 7)
             .padding(.horizontal, 4)
-            .background(RoundedRectangle(cornerRadius: 5).fill(profileId == a.id ? Theme.highlight : .clear))
+            .frame(minHeight: 44)
+            .background(RoundedRectangle(cornerRadius: 5).fill(on ? Theme.highlight : .clear))
             .animation(.snappy, value: profileId)
         }
         .buttonStyle(.row)
         .foregroundStyle(.primary)
-        .accessibilityAddTraits(profileId == a.id ? .isSelected : [])
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    // MARK: Folder
+
+    @ViewBuilder private var folderSection: some View {
+        SectionTitle("folder") {
+            if loadingFolders { ProgressView().controlSize(.mini) }
+        }
+        HStack(spacing: 6) {
+            TextField("/Users/you/Project", text: $cwd)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+                .submitLabel(.next)
+                .onSubmit { focus = .prompt }
+                .focused($focus, equals: .folder)
+            if !cwd.isEmpty && focus == .folder {
+                Button { cwd = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear folder")
+            }
+        }
+        .fieldBox(focused: focus == .folder)
+        folderStatus
+            .padding(.top, 6)
+            .animation(.snappy, value: folderState)
+
+        let list = shownFolders
+        ForEach(list) { f in folderRow(f) }
+        if folders.isEmpty && !loadingFolders {
+            Text("no recent folders for this account")
+                .font(Theme.monoSmall).foregroundStyle(.tertiary).padding(.vertical, 6)
+        }
+        if !filtering && folders.count > 6 {
+            Button(showAllFolders ? "fewer" : "all \(folders.count) folders") {
+                withAnimation(.snappy) { showAllFolders.toggle() }
+            }
+            .buttonStyle(.clayLink)
+            .padding(.top, 2)
+        }
+    }
+
+    @ViewBuilder private var folderStatus: some View {
+        switch folderState {
+        case .empty, .unknown: EmptyView()
+        case .checking: LoadingLine(text: "checking the folder…")
+        case .trusted: StatusLine(ok: true, text: "trusted on the mac")
+        case .untrusted: StatusLine(ok: false, text: "not trusted yet · starting will trust it", warn: true)
+        case .missing: StatusLine(ok: false, text: "no such folder on the mac")
+        }
+    }
+
+    /// Typing something that isn't one of the suggestions narrows them down.
+    private var filtering: Bool { !folder.isEmpty && !folders.contains { $0.cwd == folder } }
+
+    private var shownFolders: [FolderSuggestion] {
+        if filtering {
+            return Array(folders.filter { $0.cwd.localizedCaseInsensitiveContains(folder) }.prefix(8))
+        }
+        return showAllFolders ? folders : Array(folders.prefix(6))
+    }
+
+    private func folderRow(_ f: FolderSuggestion) -> some View {
+        let on = folder == f.cwd
+        return Button {
+            cwd = f.cwd
+            focus = promptText.isEmpty ? .prompt : nil
+        } label: {
+            HStack(spacing: 6) {
+                Text(on ? "●" : "▸").foregroundStyle(Theme.clay).fixedSize()
+                Text(Fmt.folderName(f.cwd)).lineLimit(1).layoutPriority(1)
+                // The "·" stays put: only the path itself is cut, from the front.
+                Text("·").foregroundStyle(.tertiary)
+                Text(f.cwd).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                Spacer(minLength: 4)
+                if f.trusted == false { Text("untrusted").foregroundStyle(Theme.yellow).fixedSize() }
+                Text(Fmt.relativeAgo(f.lastUsedAt)).foregroundStyle(.secondary).fixedSize()
+            }
+            .font(Theme.monoSmall)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 4)
+            .frame(minHeight: 40)
+            .background(RoundedRectangle(cornerRadius: 5).fill(on ? Theme.highlight : .clear))
+            .animation(.snappy, value: cwd)
+        }
+        .buttonStyle(.row)
+        .foregroundStyle(.primary)
+        .accessibilityLabel("\(Fmt.folderName(f.cwd)), \(f.cwd)\(f.trusted == false ? ", untrusted" : "")")
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    // MARK: Prompt
+
+    @ViewBuilder private var promptSection: some View {
+        SectionTitle("prompt") {
+            if promptText.count > Self.promptLimit - 2_000 {
+                Text("\(promptText.count) / \(Self.promptLimit)")
+                    .font(Theme.monoSmall)
+                    .foregroundStyle(promptText.count > Self.promptLimit ? Theme.red : .secondary)
+            }
+        }
+        TextEditor(text: $prompt)
+            .font(Theme.mono)
+            .scrollContentBackground(.hidden)
+            .frame(minHeight: 140)
+            .focused($focus, equals: .prompt)
+            .overlay(alignment: .topLeading) {
+                if prompt.isEmpty {
+                    Text("what should claude do?")
+                        .font(Theme.mono)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 8)
+                        .allowsHitTesting(false)
+                }
+            }
+            .padding(4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.code))
+            .overlay(RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(focus == .prompt ? Theme.clay : Theme.hairline))
+    }
+
+    private var startRow: some View {
+        HStack {
+            if !prompt.isEmpty && !starting {
+                Button("clear draft") { prompt = "" }
+                    .buttonStyle(LinkButtonStyle(color: .secondary, font: Theme.monoSmall))
+            }
+            Spacer()
+            if starting {
+                LoadingLine(text: "starting on your mac…").frame(minHeight: 44)
+            } else {
+                Button(folderState == .untrusted ? "↵ trust & start" : "↵ start") { start() }
+                    .buttonStyle(.clay)
+                    .disabled(!canStart)
+            }
+        }
+    }
+
+    // MARK: Actions
+
+    private func pickAccount() {
+        guard !accounts.contains(where: { $0.id == profileId }) else { return }
+        profileId = (accounts.first { $0.state == .free } ?? accounts.first)?.id ?? ""
     }
 
     private func loadFolders() async {
@@ -154,18 +282,51 @@ struct NewChatView: View {
         loadingFolders = true
         let list = await store.folders(profileId: profileId)
         loadingFolders = false
-        folders = list
-        if cwd.isEmpty, let first = list.first { cwd = first.cwd }
+        withAnimation(.snappy) { folders = list }
+        if folder.isEmpty, let first = list.first { cwd = first.cwd }
+    }
+
+    /// Asks the Mac about a typed folder once typing pauses.
+    private func checkFolder() async {
+        let path = folder
+        guard !path.isEmpty, !folders.contains(where: { $0.cwd == path && $0.trusted != nil }) else { return }
+        try? await Task.sleep(for: .milliseconds(450))
+        guard !Task.isCancelled else { return }
+        let r = await store.checkFolder(path)
+        guard !Task.isCancelled, path == folder else { return }
+        checked = (path, r)
     }
 
     private func start() {
-        let body = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        let folder = cwd.trimmingCharacters(in: .whitespaces)
+        guard canStart, let account = accounts.first(where: { $0.id == profileId }) else { return }
+        let text = promptText, path = folder, trust = folderState == .untrusted
+        let profiles = Set(account.memberProfileIds + [account.id])
+        let before = Set(store.snapshot?.sessions.map(\.id) ?? [])
+        focus = nil
         Task {
-            guard await lock.confirm("Start a new chat on your Mac") else { return }
-            let job = await store.perform(.newChat(profileId: profileId, cwd: folder, prompt: body))
-            if job?.status == .done || job?.status == .running || job?.status == .accepted { dismiss() }
+            let reason = trust ? "Trust \(Fmt.folderName(path)) and start a chat on your Mac" : "Start a new chat on your Mac"
+            guard await lock.confirm(reason) else { return }
+            starting = true
+            defer { starting = false }
+            guard let job = await store.perform(.newChat(profileId: account.id, cwd: path, prompt: text, trust: trust)),
+                  job.status == .done else { return }   // failures show as a toast on this sheet
+            Haptics.send()
+            prompt = ""
+            let id = await newChat(after: before, in: profiles, folder: path)
+            dismiss()
+            store.toast = Toast(message: job.reason ?? "Started", isError: false)
+            if let id { store.deepLink = .chat(id) }
         }
+    }
+
+    /// The chat that just appeared for this account, preferring one in the chosen folder.
+    private func newChat(after before: Set<String>, in profiles: Set<String>, folder: String) async -> String? {
+        for _ in 0..<12 {
+            let fresh = (store.snapshot?.sessions ?? []).filter { !before.contains($0.id) && profiles.contains($0.info.profileId) }
+            if let s = fresh.first(where: { $0.info.cwd == folder }) ?? fresh.first { return s.id }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        return nil
     }
 }
 

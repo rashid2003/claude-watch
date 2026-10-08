@@ -15,7 +15,7 @@ struct RootView: View {
     @State private var accountsPath = NavigationPath()
     @State private var macPath = NavigationPath()
     @State private var scrollToTop: [AppTab: Int] = [:]
-    @State private var showNewChat = false
+    @State private var showNewChat = AppDelegate.demo("demoSheet") == "newchat"
     @State private var keyboardUp = false
     @State private var limitedSeen: Set<String> = []
     @State private var recovered: Set<String> = []

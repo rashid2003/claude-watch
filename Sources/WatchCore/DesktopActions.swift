@@ -56,7 +56,11 @@ public enum DesktopActions {
     }
 
     /// Opens a new Code chat in `cwd` in the profile's window with `prompt`, and sends it.
-    public static func newChat(profile: Profile, cwd: String, prompt: String) -> Result<String, RetryError> {
+    ///
+    /// The desktop asks "Trust this workspace?" for every folder that arrives in a link, trusted or not.
+    /// The prompt is accepted here only when it names this very folder, and only when Claude Code
+    /// already trusts it or the phone explicitly asked to trust it (`allowTrust`).
+    public static func newChat(profile: Profile, cwd: String, prompt: String, allowTrust: Bool = false) -> Result<String, RetryError> {
         UILock.run {
             guard UIRetry.isTrusted else {
                 UIRetry.requestTrust()
@@ -65,18 +69,47 @@ public enum DesktopActions {
             guard FileManager.default.fileExists(atPath: cwd) else {
                 return .failure(RetryError(message: "No such folder on the Mac: \(cwd)", permanent: true))
             }
+            guard allowTrust || WorkspaceTrust.isTrusted(cwd) else {
+                return .failure(RetryError(message: untrustedMessage, permanent: true))
+            }
             guard let pid = DesktopLink.ensureRunning(profile) else {
                 return .failure(RetryError(message: "Couldn't start the \(profile.name) Claude window"))
             }
+            let before = Set(SessionIndex().sessions(for: profile).map(\.id))
             let previous = NSWorkspace.shared.frontmostApplication
+            defer { restoreFocus(previous, pid) }
             NSRunningApplication(processIdentifier: pid)?.activate()
             guard DesktopLink.sendGetURL(newChatURL(cwd: cwd, prompt: prompt), pid: pid) else {
                 return .failure(RetryError(message: "Waiting for Automation permission (Apple events to Claude)", blocked: true))
             }
-            usleep(4_000_000)
             let ax = AXUIElementCreateApplication(pid)
             AXUIElementSetAttributeValue(ax, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-            usleep(300_000)
+
+            // Wait for the folder prompt; a desktop that doesn't ask goes on once its composer has the prompt.
+            let shown = linkFolder(cwd)
+            let start = Date()
+            var accepted = false
+            while Date().timeIntervalSince(start) < 12 {
+                usleep(400_000)
+                if let (button, texts) = trustPrompt(ax) {
+                    guard promptNames(shown, texts) else {
+                        return .failure(RetryError(message: "The \(profile.name) window is asking to trust a different folder. Answer it on the Mac.",
+                                                   permanent: true))
+                    }
+                    guard AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else {
+                        return .failure(RetryError(message: "Couldn't confirm the folder in the \(profile.name) window"))
+                    }
+                    accepted = true
+                    usleep(900_000)
+                    break
+                }
+                if Date().timeIntervalSince(start) > 8, let c = UIRetry.findComposer(ax),
+                   startsLike(UIRetry.attr(c, kAXValueAttribute) as? String, prompt) { break }
+            }
+            if accepted, trustPrompt(ax) != nil {
+                return .failure(RetryError(message: "The folder prompt is still showing in the \(profile.name) window"))
+            }
+
             guard let composer = UIRetry.findComposer(ax) else {
                 return .failure(RetryError(message: "Opened a new chat but couldn't find its message box"))
             }
@@ -86,10 +119,58 @@ public enum DesktopActions {
             if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { UIRetry.type(prompt, pid: pid) }
             usleep(250_000)
             UIRetry.key(36, pid: pid)   // Return
-            usleep(800_000)
-            restoreFocus(previous, pid)
-            return .success("Started in \(profile.name)")
+
+            // Confirm the chat exists before reporting success.
+            for _ in 0..<20 {
+                usleep(750_000)
+                if let s = SessionIndex().sessions(for: profile).first(where: { !before.contains($0.id) }) {
+                    return sameFolder(s.cwd, cwd) || sameFolder(s.cwd, shown)
+                        ? .success("Started in \(profile.name)")
+                        : .success("Started in \(profile.name), in \(s.cwd)")
+                }
+            }
+            return .success("Sent to the \(profile.name) window; the chat hasn't shown up yet")
         }
+    }
+
+    public static let untrustedMessage = "Claude Code doesn't trust this folder on the Mac yet."
+
+    /// The desktop opens a folder inside `<repo>/.claude/worktrees/` at the repo itself.
+    static func linkFolder(_ cwd: String) -> String {
+        let parts = (cwd as NSString).standardizingPath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        for i in 1..<max(1, parts.count - 2) where parts[i].lowercased() == ".claude" && parts[i + 1].lowercased() == "worktrees" {
+            let root = parts[0..<i].joined(separator: "/")
+            return root.isEmpty ? "/" : root
+        }
+        return (cwd as NSString).standardizingPath
+    }
+
+    /// The prompt's texts show `folder`: in full, or (very long paths) its start before the ellipsis.
+    static func promptNames(_ folder: String, _ texts: [String]) -> Bool {
+        let f = WorkspaceTrust.normalize(folder)
+        return texts.contains { t in
+            let t = t.trimmingCharacters(in: .whitespacesAndNewlines)
+            if WorkspaceTrust.normalize(t) == f { return true }
+            return f.count > 120 && t.count >= 120 && f.hasPrefix(String(t.prefix(120)))
+        }
+    }
+
+    static func startsLike(_ value: String?, _ prompt: String) -> Bool {
+        let v = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !v.isEmpty && v.hasPrefix(String(p.prefix(40)))
+    }
+
+    static func sameFolder(_ a: String, _ b: String) -> Bool { WorkspaceTrust.normalize(a) == WorkspaceTrust.normalize(b) }
+
+    /// The "Trust workspace" button of an open folder prompt, with the texts in its window.
+    private static func trustPrompt(_ ax: AXUIElement) -> (AXUIElement, [String])? {
+        for case let win as AXUIElement in (UIRetry.attr(ax, kAXWindowsAttribute) as? [AnyObject]) ?? [] {
+            guard let b = buttons(in: win).first(where: { $0.title.trimmingCharacters(in: .whitespaces).lowercased() == "trust workspace" })
+            else { continue }
+            return (b.el, texts(in: win))
+        }
+        return nil
     }
 
     /// `claude://code/new?folder=<cwd>&q=<prompt>` (the desktop app caps the prompt at 14 336 chars).
@@ -168,6 +249,24 @@ public enum DesktopActions {
         if let previous, previous.processIdentifier != pid, previous.bundleIdentifier != Bundle.main.bundleIdentifier {
             previous.activate()
         }
+    }
+
+    /// Static texts (and the full-path tooltips the desktop puts on shortened ones) in a window.
+    static func texts(in win: AXUIElement) -> [String] {
+        var out: [String] = []
+        var queue: [(AXUIElement, Int)] = [(win, 0)]
+        var visited = 0
+        while !queue.isEmpty, visited < 8000 {
+            let (el, depth) = queue.removeFirst()
+            visited += 1
+            for name in [kAXValueAttribute, kAXTitleAttribute, kAXHelpAttribute, kAXDescriptionAttribute] {
+                if let t = UIRetry.attr(el, name) as? String, !t.isEmpty { out.append(t) }
+            }
+            if depth < 40, let kids = UIRetry.attr(el, kAXChildrenAttribute) as? [AnyObject] {
+                for k in kids { queue.append((k as! AXUIElement, depth + 1)) }
+            }
+        }
+        return out
     }
 
     static func buttons(in win: AXUIElement) -> [Button] {
