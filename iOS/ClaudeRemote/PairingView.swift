@@ -110,6 +110,10 @@ struct PairingView: View {
                 .padding(.bottom, 24)
             }
             .screenBackground()
+            #if DEBUG
+            // Development: pair the Simulator in one go (SIMCTL_CHILD_SW_PAIR='{"v":1,"macName":…}', the QR's JSON).
+            .task { if let qr = ProcessInfo.processInfo.environment["SW_PAIR"] { handleScan(qr) } }
+            #endif
             .scrollDismissesKeyboard(.interactively)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
