@@ -2,6 +2,7 @@ import ActivityKit
 import BackgroundTasks
 import Foundation
 import Observation
+import UIKit
 import WatchProtocol
 import WidgetKit
 
@@ -10,12 +11,14 @@ import WidgetKit
 ///
 /// While the app runs it updates the activity itself; once it is in the background the Mac takes over with
 /// Live Activity pushes, using the tokens this hands it. The Mac can also start a fresh activity when the
-/// 8-hour one runs out.
+/// 8-hour one runs out. When the app loses the Mac for a while it marks the activity disconnected itself.
 @MainActor @Observable
 final class LiveActivities {
     private static let enabledKey = "liveActivity.enabled"
     private static let localInterval: TimeInterval = 20
     private static let widgetInterval: TimeInterval = 60
+    /// How long the app must be cut off from the Mac before the activity says so (rides out quick reconnects).
+    private static let offlineGrace: TimeInterval = 30
 
     /// The user wants the limits on the Lock Screen. On by default.
     var enabled: Bool {
@@ -37,6 +40,10 @@ final class LiveActivities {
     @ObservationIgnored private var sentTokens: [String: String] = [:]   // what the Mac already has, by field
     @ObservationIgnored private var watched: Set<String> = []
     @ObservationIgnored private var started = false
+    @ObservationIgnored private var offlineTimer: Task<Void, Never>?
+    @ObservationIgnored private var markedOffline = false
+    @ObservationIgnored private var lostAt: Date?        // when the app lost the Mac; nil while connected
+    @ObservationIgnored private var activeSince: Date?   // when the app came to the front; nil when it isn't
 
     init() {
         enabled = UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? true
@@ -48,6 +55,7 @@ final class LiveActivities {
     func start() {
         guard !started else { return }
         started = true
+        observeForeground()
         Task {
             for await token in LimitsActivity.pushToStartTokenUpdates {
                 await send(field: "start", token.hex)
@@ -84,9 +92,57 @@ final class LiveActivities {
             guard lastLocal.map({ $0.state.comparable != limits.comparable && now.timeIntervalSince($0.at) > Self.localInterval
                 || now.timeIntervalSince($0.at) > 600 }) ?? true else { return }
             lastLocal = (limits, now)
+            markedOffline = false
             Task { await current.update(content(limits, now)) }
         } else {
             Task { await apply() }
+        }
+    }
+
+    /// Follows the app's own connection to the Mac. Lost for `offlineGrace` while the app is in front, the activity
+    /// is marked disconnected; back, it shows the latest limits again.
+    func reachable(_ yes: Bool) {
+        if yes {
+            lostAt = nil
+            armOfflineTimer()
+            guard markedOffline else { return }
+            lastLocal = nil   // the next snapshot clears the mark, without waiting out the throttle
+            if let latest { update(latest.limits, macName: latest.macName) }
+        } else if lostAt == nil {
+            lostAt = Date()
+            armOfflineTimer()
+        }
+    }
+
+    /// Times the offline mark from whichever came later, losing the Mac or the app coming to the front, so the
+    /// reconnect after a stretch in the background doesn't flash "offline".
+    private func armOfflineTimer() {
+        offlineTimer?.cancel()
+        offlineTimer = nil
+        guard let lostAt, let activeSince, !markedOffline else { return }
+        let due = max(lostAt, activeSince).addingTimeInterval(Self.offlineGrace)
+        offlineTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, due.timeIntervalSinceNow)))
+            guard !Task.isCancelled else { return }
+            self?.markOffline()
+        }
+    }
+
+    /// Tracks when the app came to the front; the offline timer only runs while it's there.
+    private func observeForeground() {
+        let center = NotificationCenter.default
+        activeSince = UIApplication.shared.applicationState == .active ? Date() : nil
+        center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.activeSince = Date()
+                self?.armOfflineTimer()
+            }
+        }
+        center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.activeSince = nil
+                self?.armOfflineTimer()
+            }
         }
     }
 
@@ -136,7 +192,21 @@ final class LiveActivities {
     // MARK: Private
 
     private func content(_ l: LiveLimits, _ now: Date) -> ActivityContent<LiveLimits> {
-        ActivityContent(state: l, staleDate: now.addingTimeInterval(30 * 60), relevanceScore: l.anyLimited || l.prompts > 0 ? 100 : 50)
+        ActivityContent(state: l, staleDate: now.addingTimeInterval(LiveLimits.staleAfter),
+                        relevanceScore: l.anyLimited || l.prompts > 0 ? 100 : 50)
+    }
+
+    /// Keeps the last numbers (and when the Mac sent them) but flags them as disconnected and already stale.
+    /// In the background the Mac's pushes own the activity, so this only acts while the app is in front.
+    private func markOffline() {
+        offlineTimer = nil
+        guard activeSince != nil, lostAt != nil, enabled, allowed,
+              let current = LimitsActivity.activities.first(where: { $0.activityState == .active }) else { return }
+        markedOffline = true
+        var state = current.content.state
+        state.connected = false
+        lastLocal = (state, Date())
+        Task { await current.update(ActivityContent(state: state, staleDate: Date(), relevanceScore: 50)) }
     }
 
     /// Starts or ends the activity to match `enabled`, and tells the Mac.
@@ -154,6 +224,7 @@ final class LiveActivities {
             let a = try LimitsActivity.request(attributes: LimitsActivityAttributes(macName: latest.macName),
                                                content: content(latest.limits, Date()), pushType: .token)
             lastLocal = (latest.limits, Date())
+            markedOffline = false
             watch(a)
         } catch {
             // Too many activities, or the app is in the background: the Mac starts one with push-to-start instead.

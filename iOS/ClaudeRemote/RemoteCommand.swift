@@ -28,10 +28,15 @@ struct RemoteCommand: Sendable {
         return .init("/v1/chats/\(seg(chatId))/reply", b, requestId: b.requestId, key: Keys.reply(chatId), label: "Reply")
     }
 
+    static func cancelReply(id: String) -> RemoteCommand {
+        let b = PlainCommand()
+        return .init("/v1/replies/\(seg(id))/cancel", b, requestId: b.requestId, key: Keys.queued(id), label: "Remove")
+    }
+
     static func answer(chatId: String, promptId: String, decision: PromptDecision) -> RemoteCommand {
         let b = PromptAnswerBody(promptId: promptId, decision: decision)
         return .init("/v1/chats/\(seg(chatId))/prompt", b, requestId: b.requestId, key: Keys.prompt(promptId),
-                     label: decision == .deny ? "Deny" : "Allow")
+                     label: decision == .deny ? "Deny" : decision == .allowAlways ? "Always allow" : "Allow")
     }
 
     static func stop(chatId: String) -> RemoteCommand {
@@ -109,6 +114,7 @@ struct RemoteCommand: Sendable {
 enum Keys {
     static func reply(_ chat: String) -> String { "reply:" + chat }
     static func stop(_ chat: String) -> String { "stop:" + chat }
+    static func queued(_ id: String) -> String { "queued:" + id }
     static func prompt(_ id: String) -> String { "prompt:" + id }
     static func queue(_ id: String) -> String { "queue:" + id }
     static func mode(_ profile: String) -> String { "mode:" + profile }

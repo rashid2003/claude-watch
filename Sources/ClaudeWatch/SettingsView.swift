@@ -33,8 +33,9 @@ struct SettingsView: View {
                     .disabled(cfg.showInDock && !cfg.showInMenuBar)
                 LabeledContent {
                     Toggle("", isOn: Binding(get: { login.enabled }, set: { login.set($0) })).labelsHidden()
+                        .disabled(!LoginItem.isAppBundle)
                 } label: {
-                    Text("Launch at login")
+                    Text("Open at login")
                     Text(login.statusText).foregroundStyle(login.needsApproval ? Theme.yellow : .secondary)
                 }
                 if login.needsApproval {
@@ -232,8 +233,21 @@ private struct CommitTextField: View {
     }
 }
 
-/// "Launch at login" through SMAppService (the app itself as a login item).
+/// "Open at login" through SMAppService (the app itself as a login item).
 struct LoginItem {
+    /// True only when running from a real `.app` (not `swift run` or a dev binary).
+    static var isAppBundle: Bool { Bundle.main.bundleURL.pathExtension == "app" }
+
+    private static let registeredKey = "openAtLoginDefaultApplied"
+
+    /// First launch of a build with this feature: register once, then never again, so a user who
+    /// turned it off stays off.
+    static func registerOnFirstLaunch(defaults: UserDefaults = .standard) {
+        guard isAppBundle, !Paths.isSideBySide, !defaults.bool(forKey: registeredKey) else { return }
+        defaults.set(true, forKey: registeredKey)
+        if SMAppService.mainApp.status == .notRegistered { try? SMAppService.mainApp.register() }
+    }
+
     private(set) var status: SMAppService.Status = SMAppService.mainApp.status
     private(set) var error: String?
 
@@ -244,7 +258,7 @@ struct LoginItem {
         case .enabled: "on"
         case .requiresApproval: "needs approval in System Settings › Login Items"
         case .notRegistered: "off"
-        case .notFound: "unavailable for this copy of the app"
+        case .notFound: Self.isAppBundle ? "unavailable for this copy of the app" : "only works from the installed app"
         @unknown default: "unknown"
         }
     }

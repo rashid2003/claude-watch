@@ -73,6 +73,31 @@ public struct PendingPrompt: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// A push's `aps.category`: picks the action buttons the phone shows on the notification.
+public enum PushCategory {
+    public static let prompt = "PROMPT"                      // Allow / Deny
+    public static let promptAlways = "PROMPT_ALWAYS"         // Allow / Always / Deny
+    /// Shell commands: with the app lock on, the phone asks for Face ID again, so Allow opens the app.
+    public static let promptShell = "PROMPT_SHELL"
+    public static let promptShellAlways = "PROMPT_SHELL_ALWAYS"
+    public static let chat = "CHAT"
+    public static let account = "ACCOUNT"
+    public static let system = "SYSTEM"
+
+    public static var prompts: [String] { [prompt, promptAlways, promptShell, promptShellAlways] }
+
+    /// Questions are answered on the Mac, so they get the plain chat actions.
+    public static func of(_ p: PendingPrompt) -> String {
+        guard p.kind == .permission else { return chat }
+        switch (p.toolName == "Bash", p.canAllowAlways) {
+        case (false, false): return prompt
+        case (false, true): return promptAlways
+        case (true, false): return promptShell
+        case (true, true): return promptShellAlways
+        }
+    }
+}
+
 // MARK: - Commands and jobs
 
 public enum JobStatus: String, Codable, Sendable {
@@ -241,6 +266,9 @@ public enum WSServerMessage: Sendable {
     /// New or updated messages of the subscribed chat (upsert by id). `reset` = replace what you have
     /// (the first batch after subscribing); `before` is then the cursor for older pages.
     case messages(chatId: String, messages: [ChatMessage], reset: Bool, before: Int?)
+    /// What the subscribed chat is doing (full detail), sent after subscribing and whenever it changes.
+    /// Phones that don't know it skip it.
+    case work(chatId: String, work: LiveWork)
     case job(Job)
     /// The Mac's resources, every 5 s while the phone watches (`watchSystem`). The first one after
     /// `watchSystem` carries the full history, later ones only the newest point.
@@ -249,7 +277,7 @@ public enum WSServerMessage: Sendable {
 }
 
 extension WSServerMessage: Codable {
-    enum CodingKeys: String, CodingKey { case type, snapshot, chatId, messages, reset, before, job, system }
+    enum CodingKeys: String, CodingKey { case type, snapshot, chatId, messages, reset, before, work, job, system }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -260,6 +288,7 @@ extension WSServerMessage: Codable {
                              messages: try c.decode([ChatMessage].self, forKey: .messages),
                              reset: try c.decodeIfPresent(Bool.self, forKey: .reset) ?? false,
                              before: try c.decodeIfPresent(Int.self, forKey: .before))
+        case "work": self = .work(chatId: try c.decode(String.self, forKey: .chatId), work: try c.decode(LiveWork.self, forKey: .work))
         case "job": self = .job(try c.decode(Job.self, forKey: .job))
         case "system": self = .system(try c.decode(SystemHealth.self, forKey: .system))
         case "pong": self = .pong
@@ -275,6 +304,8 @@ extension WSServerMessage: Codable {
             try c.encode("messages", forKey: .type); try c.encode(id, forKey: .chatId)
             try c.encode(m, forKey: .messages); try c.encode(reset, forKey: .reset)
             try c.encodeIfPresent(before, forKey: .before)
+        case .work(let id, let w):
+            try c.encode("work", forKey: .type); try c.encode(id, forKey: .chatId); try c.encode(w, forKey: .work)
         case .job(let j): try c.encode("job", forKey: .type); try c.encode(j, forKey: .job)
         case .system(let h): try c.encode("system", forKey: .type); try c.encode(h, forKey: .system)
         case .pong: try c.encode("pong", forKey: .type)

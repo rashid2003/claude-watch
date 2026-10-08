@@ -79,4 +79,28 @@ final class ChatFeedTests: XCTestCase {
         XCTAssertEqual(first.messages.count, 1)
         XCTAssertNil(first.before)
     }
+
+    func testTranscriptCacheMatchesAFreshParseAndCarriesOn() throws {
+        let lines = fixtureLines()
+        let url = tempFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+        var data = Data(lines[0..<5].joined(separator: Data([0x0A])))
+        data.append(0x0A)
+        try data.write(to: url)
+
+        let cache = TranscriptCache()
+        let (first, feed) = cache.open(url)
+        XCTAssertEqual(first, ChatFeed.messages(fromLines: Array(lines[0..<5])))
+        XCTAssertTrue(feed.poll().isEmpty, "the feed starts where the cache left off")
+
+        let h = try FileHandle(forWritingTo: url)
+        h.seekToEndOfFile()
+        h.write(Data(lines[5...].joined(separator: Data([0x0A]))))
+        h.write(Data([0x0A]))
+        try h.close()
+        XCTAssertFalse(feed.poll().isEmpty)
+        let all = ChatFeed.messages(fromLines: lines)
+        XCTAssertEqual(cache.open(url).messages, all)
+        XCTAssertEqual(cache.page(url, before: nil, limit: 3).messages, Array(all.suffix(3)))
+    }
 }

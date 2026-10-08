@@ -5,7 +5,9 @@ import IOKit.pwr_mgt
 import WatchBridge
 import WatchCore
 
-extension ChatFeed: MessageSource {}
+extension ChatFeed: MessageSource {
+    public var liveWork: LiveWork? { work }
+}
 
 /// Connects the iPhone bridge to the Monitor: answers its reads, runs its commands, and turns
 /// events into push notifications.
@@ -13,12 +15,25 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     let monitor: Monitor
     let server: BridgeServer
     let broker = PromptBroker(path: Paths.bridgeSocket)
-    let pusher = Pusher(key: APNsKey.load())
+    let pusher = Pusher(key: Paths.isSideBySide ? nil : APNsKey.load())
     let liveActivities = LiveActivityDriver()
     let runner: HeadlessRunner
     private let lock = NSLock()
     private var latest: Snapshot?
     private var touched: [String: Date] = [:]          // chats the phone acted on -> when
+    /// Replies sent from the phone while their chat was busy.
+    let replies = ReplyQueue(url: Paths.replyQueue)
+    private var sentAt: [String: Date] = [:]           // chat -> when a reply last went out
+    private var draining = Set<String>()                // chats whose queued replies are being sent
+    /// Unsent text per chat: posted by the phone, or read from the desktop composer while a phone watches the chat.
+    let drafts = DraftBook(url: Paths.drafts)
+    private let draftReader = DesktopDraftReader()
+    private let draftQueue = DispatchQueue(label: "claude-watch.drafts", qos: .utility)
+    private var draftTimer: DispatchSourceTimer?
+    /// Called on the main queue with every chat's draft when one changes (Mac chat list).
+    var onDrafts: (([String: ChatDraft]) -> Void)?
+    /// Parsed transcripts, so reopening a chat on the phone only reads what's new.
+    private let transcripts = TranscriptCache()
     private var lastActivity: [String: SessionStatus.Activity] = [:]
     private var knownPrompts = Set<String>()
     private var firstSnapshot = true
@@ -75,6 +90,13 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         try? broker.start()
         server.start()
         syncRelay()
+        let t = DispatchSource.makeTimerSource(queue: draftQueue)
+        t.schedule(deadline: .now() + 2, repeating: 2, leeway: .milliseconds(500))
+        t.setEventHandler { [weak self] in self?.pollDesktopDrafts() }
+        t.resume()
+        draftTimer = t
+        let all = drafts.all
+        DispatchQueue.main.async { [weak self] in self?.onDrafts?(all) }
         // Development: pair the Simulator without the menu (CLAUDE_WATCH_DEV_PAIR_CODE=123456).
         if let code = ProcessInfo.processInfo.environment["CLAUDE_WATCH_DEV_PAIR_CODE"], code.count == 6 {
             server.pairing.open(code: code, lifetime: 3600)
@@ -82,6 +104,8 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     }
 
     func stop() {
+        draftTimer?.cancel()
+        draftTimer = nil
         relay?.stop()
         relay = nil
         server.stop()
@@ -97,6 +121,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         server.publish(snapshot: merged)
         notifyTransitions(merged)
         driveLiveActivities(merged)
+        drainReplies(merged)
         evaluateKeepAwake()
         syncRelay()
     }
@@ -138,6 +163,8 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     private func merge(_ s: Snapshot) -> Snapshot {
         var m = s
         m.systemLevel = lock.withLock { health?.level }
+        m.replies = replies.all
+        m.drafts = drafts.all
         let extra = broker.prompts
         guard !extra.isEmpty else { return m }
         m.prompts += extra
@@ -148,6 +175,34 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             }
         }
         return m
+    }
+
+    // MARK: Drafts
+
+    func setDraft(chatId: String, text: String, device: Device) -> Bool {
+        guard session(chatId) != nil else { return false }
+        if drafts.setPhone(chatId: chatId, text: text) { draftsChanged() }
+        return true
+    }
+
+    /// Reads the desktop composer of chats a phone has open (every 2 s; nothing when no phone watches).
+    private func pollDesktopDrafts() {
+        let watched = server.watchedChats
+        drafts.forgetDesktop(except: watched)
+        guard !watched.isEmpty else { return draftReader.reset() }
+        var changed = false
+        for id in watched.sorted() {
+            guard let s = session(id), let p = profile(s.info.profileId),
+                  let text = draftReader.read(session: s.info, profile: p) else { continue }
+            if drafts.observeDesktop(chatId: id, text: text) { changed = true }
+        }
+        if changed { draftsChanged() }
+    }
+
+    private func draftsChanged() {
+        if let s = lock.withLock({ latest }) { server.publish(snapshot: merge(s)) }
+        let all = drafts.all
+        DispatchQueue.main.async { [weak self] in self?.onDrafts?(all) }
     }
 
     private func session(_ id: String) -> SessionStatus? {
@@ -176,7 +231,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     }
 
     func pushSystem(title: String, body: String) {
-        push(PushNote(category: "SYSTEM", title: title, body: body, collapseId: "system"), .system)
+        push(PushNote(category: PushCategory.system, title: title, body: body, collapseId: "system"), .system)
     }
 
     func systemHealth() -> SystemHealth? {
@@ -220,13 +275,13 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     }
 
     func messages(chatId: String, before: Int?, limit: Int) -> MessagesPage? {
-        transcript(chatId).map { ChatFeed.page(url: $0, before: before, limit: limit) }
+        transcript(chatId).map { transcripts.page($0, before: before, limit: limit) }
     }
 
     func subscribe(chatId: String) -> (source: MessageSource, initial: [ChatMessage])? {
         guard let url = transcript(chatId) else { return nil }
-        let feed = ChatFeed(url: url)
-        return (feed, feed.poll())
+        let (all, feed) = transcripts.open(url)
+        return (feed, all)
     }
 
     func folders(profileId: String) -> [FolderSuggestion] {
@@ -258,8 +313,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     func check(_ command: BridgeCommand) -> (Int, String)? {
         switch command {
         case .reply(let id, _):
-            guard let s = session(id) else { return (404, "That chat isn't listed on the Mac any more") }
-            if s.activity == .working || runner.isRunning(sessionId: id) { return (409, HeadlessRunner.busyMessage) }
+            guard session(id) != nil else { return (404, "That chat isn't listed on the Mac any more") }
         case .answer(_, let pid, _):
             guard snapshot()?.prompts.contains(where: { $0.id == pid }) == true else { return (409, "That prompt is no longer pending") }
         case .stop(let id):
@@ -289,6 +343,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         case .reply(let id, _), .answer(let id, _, _), .stop(let id): lock.withLock { touched[id] = Date() }
         default: break
         }
+        if case .reply(let id, _) = command, drafts.clear(chatId: id) { draftsChanged() }   // the draft was sent
         work.async { [self] in
             let (status, reason) = run(command)
             done(status, reason)
@@ -303,16 +358,58 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         }
     }
 
+    /// A chat can't take a reply now: Claude is working or waiting on a prompt, a background run is
+    /// going, or a reply went out moments ago and the transcript hasn't caught up yet.
+    private func isBusy(_ s: SessionStatus) -> Bool {
+        let recent = lock.withLock { sentAt[s.id] }.map { Date().timeIntervalSince($0) < 8 } ?? false
+        return s.activity == .working || s.activity == .waiting || runner.isRunning(sessionId: s.id) || recent
+    }
+
+    /// Sends a reply now: in the background with the account's CLI token, else typed into the desktop window.
+    private func send(_ text: String, to s: SessionStatus) -> (JobStatus, String?) {
+        guard let p = profile(s.info.profileId) else { return (.failed, "Chat not found") }
+        lock.withLock { sentAt[s.id] = Date() }
+        if TokenStore.get(p.id) == nil {
+            return result(UIRetry.type(message: text, session: s.info, profile: p).map { _ in "Typed into the \(p.name) window" })
+        }
+        return result(runner.reply(text, session: s.info, profile: p, activity: s.activity)
+            .map { "Sent in the background (pid \($0))" })
+    }
+
+    /// Sends queued replies for chats that have gone idle, all of a chat's queued replies as one message.
+    private func drainReplies(_ snap: Snapshot) {
+        for id in replies.waitingChats {
+            guard let s = snap.sessions.first(where: { $0.id == id }), !isBusy(s) else { continue }
+            guard lock.withLock({ draining.insert(id).inserted }) else { continue }
+            work.async { [self] in
+                defer { lock.withLock { _ = draining.remove(id) } }
+                guard let fresh = session(id), !isBusy(fresh) else { return }
+                let batch = replies.take(chatId: id)
+                guard !batch.isEmpty else { return }
+                let (status, reason) = send(ReplyQueue.combined(batch), to: fresh)
+                if status != .done { replies.fail(batch, error: reason ?? "Couldn't send it") }
+                republish()
+                monitor.refreshNow()
+            }
+        }
+    }
+
     /// Runs one command on the remote-actions queue (may block for seconds).
     private func run(_ command: BridgeCommand) -> (JobStatus, String?) {
         switch command {
         case .reply(let id, let text):
-            guard let s = session(id), let p = profile(s.info.profileId) else { return (.failed, "Chat not found") }
-            if TokenStore.get(p.id) == nil {
-                return result(UIRetry.type(message: text, session: s.info, profile: p).map { _ in "Typed into the \(p.name) window" })
+            guard let s = session(id) else { return (.failed, "Chat not found") }
+            if isBusy(s) || replies.has(chatId: id) {   // behind earlier queued replies too, so order holds
+                replies.add(chatId: id, text: text)
+                republish()
+                return (.done, "Queued. It's sent when Claude finishes this turn.")
             }
-            return result(runner.reply(text, session: s.info, profile: p, activity: s.activity)
-                .map { "Sent in the background (pid \($0))" })
+            return send(text, to: s)
+
+        case .cancelReply(let rid):
+            guard replies.remove(id: rid) else { return (.failed, "That message was already sent") }
+            republish()
+            return (.done, nil)
 
         case .answer(let chatId, let promptId, let decision):
             guard let prompt = snapshot()?.prompts.first(where: { $0.id == promptId }) else { return (.failed, "Prompt no longer pending") }
@@ -445,22 +542,18 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         if lock.withLock({ let f = firstSnapshot; firstSnapshot = false; return f }) { return }
 
         for p in newPrompts {
-            let title = accountName(s, p.profileId) + " · " + p.chatTitle
-            let body = p.kind == .question ? p.summary : "\(p.toolName): \(p.summary)"
-            push(PushNote(category: p.kind == .question ? "CHAT" : "PROMPT", title: title, body: body,
-                          threadId: p.chatId, collapseId: "prompt-" + p.chatId,
-                          userInfo: ["chatId": p.chatId, "promptId": p.id, "profileId": p.profileId]), .prompt)
+            push(.prompt(p, account: accountName(s, p.profileId)), .prompt)
         }
         let recent = lock.withLock { touched }
         for (sess, before) in changes where recent[sess.id] != nil {
             let info = ["chatId": sess.id, "profileId": sess.info.profileId]
             let title = accountName(s, sess.info.profileId) + " · " + sess.info.title
             if sess.activity == .idle, before == .working || before == .waiting {
-                push(PushNote(category: "CHAT", title: title, body: "Claude finished its turn.", threadId: sess.id,
+                push(PushNote(category: PushCategory.chat, title: title, body: "Claude finished its turn.", threadId: sess.id,
                               collapseId: "chat-" + sess.id, userInfo: info), .finished)
             } else if sess.activity == .failed, before != .failed {
                 let why = sess.tail.lastRateLimit?.text ?? sess.info.desktopError ?? "The chat stopped with an error."
-                push(PushNote(category: "CHAT", title: title, body: why, threadId: sess.id,
+                push(PushNote(category: PushCategory.chat, title: title, body: why, threadId: sess.id,
                               collapseId: "chat-" + sess.id, userInfo: info), .failed)
             }
         }
@@ -471,13 +564,13 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         let note: PushNote?
         switch e {
         case .accountFree(let p):
-            note = PushNote(category: "ACCOUNT", title: "\(p.name) is free", body: "Nothing running. Ready for the next task.",
+            note = PushNote(category: PushCategory.account, title: "\(p.name) is free", body: "Nothing running. Ready for the next task.",
                             collapseId: "acct-" + p.id, userInfo: ["profileId": p.id])
         case .limitReset(let p):
-            note = PushNote(category: "ACCOUNT", title: "\(p.name) limit reset", body: "The account can be used again.",
+            note = PushNote(category: PushCategory.account, title: "\(p.name) limit reset", body: "The account can be used again.",
                             collapseId: "acct-" + p.id, userInfo: ["profileId": p.id])
         case .capSoon(let p, let k, let at):
-            note = PushNote(category: "ACCOUNT", title: "\(p.name) nearing its \(k == .weekly ? "weekly" : "5-hour") limit",
+            note = PushNote(category: PushCategory.account, title: "\(p.name) nearing its \(k == .weekly ? "weekly" : "5-hour") limit",
                             body: "At this pace it hits the cap in ~\(Fmt.duration(at.timeIntervalSinceNow)).",
                             collapseId: "acct-" + p.id, userInfo: ["profileId": p.id])
         default: note = nil

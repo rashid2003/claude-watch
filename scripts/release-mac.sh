@@ -5,6 +5,9 @@
 #
 #   scripts/release-mac.sh                 build, sign, DMG, notarize
 #   scripts/release-mac.sh --no-notarize   stop after the signed DMG
+#   VARIANT=next scripts/release-mac.sh    "Session Watch Next": a side-by-side build with its own bundle id,
+#                                          data folder (claude-watch-next) and port (7434), for trying changes
+#                                          without touching the installed app
 #
 # Notarization uses a notarytool keychain profile, created once with:
 #   xcrun notarytool store-credentials session-watch-notary --apple-id <you> --team-id 6W5NJUTUCV
@@ -15,12 +18,17 @@ cd "${0:A:h}/.."
 
 VERSION="${VERSION:-0.4.0}"
 BUILD="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}"
-BUNDLE_ID="${CLAUDE_WATCH_BUNDLE_ID:-dev.lajward.SessionWatch}"
+VARIANT="${VARIANT:-}"
+if [[ "$VARIANT" == "next" ]]; then
+  NAME="Session Watch Next"; DEFAULT_ID="dev.lajward.SessionWatch.next"; FOLDER="claude-watch-next"; OUT="build/mac-next"
+else
+  NAME="Session Watch"; DEFAULT_ID="dev.lajward.SessionWatch"; FOLDER="claude-watch"; OUT="build/mac"
+fi
+BUNDLE_ID="${CLAUDE_WATCH_BUNDLE_ID:-$DEFAULT_ID}"
 IDENTITY="${SIGN_IDENTITY:-Developer ID Application: Rashid Obaidi (6W5NJUTUCV)}"
 PROFILE="${NOTARY_PROFILE:-session-watch-notary}"
-OUT="build/mac"
 APP="$OUT/ClaudeWatch.app"
-DMG="$OUT/SessionWatch-$VERSION.dmg"
+DMG="$OUT/${NAME// /}-$VERSION.dmg"
 
 echo "› building universal release"
 ARCHS=(--arch arm64 --arch x86_64)
@@ -36,8 +44,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
-  <key>CFBundleName</key><string>Session Watch</string>
-  <key>CFBundleDisplayName</key><string>Session Watch</string>
+  <key>CFBundleName</key><string>$NAME</string>
+  <key>CFBundleDisplayName</key><string>$NAME</string>
+  <key>SWDataFolder</key><string>$FOLDER</string>
   <key>CFBundleExecutable</key><string>ClaudeWatch</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -58,7 +67,7 @@ codesign --verify --strict --deep "$APP"
 
 echo "› packing $DMG"
 STAGE="$OUT/dmg" && mkdir -p "$STAGE" && cp -R "$APP" "$STAGE/" && ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "Session Watch" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+hdiutil create -volname "$NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 codesign --force --timestamp --sign "$IDENTITY" "$DMG"
 rm -rf "$STAGE"
 

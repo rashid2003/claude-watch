@@ -17,8 +17,11 @@ public struct ActivityPush: Sendable, Equatable {
         self.event = event; self.state = state; self.macName = macName; self.important = important; self.now = now
     }
 
-    /// The activity shows as out of date if nothing arrives for this long (the Mac asleep or offline).
-    public static let staleAfter: TimeInterval = 30 * 60
+    /// The activity shows as disconnected if nothing arrives for this long (the Mac asleep, quit or offline).
+    public static let staleAfter: TimeInterval = LiveLimits.staleAfter
+
+    /// When the phone should treat this content as out of date; nil for an end.
+    public var staleDate: Date? { event == .end ? nil : now.addingTimeInterval(Self.staleAfter) }
 
     public func payload() -> Data {
         let content = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(state))) ?? [:]
@@ -29,12 +32,12 @@ public struct ActivityPush: Sendable, Equatable {
             aps["attributes-type"] = Self.attributesType
             aps["attributes"] = ["macName": macName]
             aps["alert"] = ["title": "Claude limits", "body": "Tracking your accounts on the Lock Screen."]
-            aps["stale-date"] = t + Int(Self.staleAfter)
         case .update:
-            aps["stale-date"] = t + Int(Self.staleAfter)
+            break
         case .end:
             aps["dismissal-date"] = t
         }
+        if let staleDate { aps["stale-date"] = Int(staleDate.timeIntervalSince1970) }
         return (try? JSONSerialization.data(withJSONObject: ["aps": aps], options: [.sortedKeys])) ?? Data()
     }
 
@@ -45,11 +48,14 @@ public struct ActivityPush: Sendable, Equatable {
 /// Decides when to start, update, restart and end each phone's Live Activity from the Mac's snapshots.
 ///
 /// Updates are rationed: a change in an account's state or in the prompts waiting goes out at once; a percent that
-/// crept up waits until `minorInterval` since the last send; and a quiet activity still gets a heartbeat before it
-/// goes stale. Activities live 8 hours, so one near its end is replaced with a fresh one.
+/// crept up waits until `minorInterval` since the last send; and a quiet activity still gets a heartbeat, so it only
+/// goes stale (and shows the Mac as offline) when the Mac stops sending. Heartbeats are priority 5, which Apple
+/// doesn't count against the push budget; one every 5 minutes is 12 an hour. Activities live 8 hours, so one near
+/// its end is replaced with a fresh one.
 public final class LiveActivityDriver: @unchecked Sendable {
     public static let minorInterval: TimeInterval = 120
-    public static let heartbeat: TimeInterval = 15 * 60
+    /// Well inside `ActivityPush.staleAfter`, so one late or dropped low-priority push doesn't show the Mac as offline.
+    public static let heartbeat: TimeInterval = 5 * 60
     public static let rollover: TimeInterval = 7 * 3600 + 45 * 60
     public static let startRetry: TimeInterval = 10 * 60
     public static let appOpenWindow: TimeInterval = 90

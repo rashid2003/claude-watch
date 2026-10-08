@@ -5,12 +5,16 @@ import Observation
 /// Face ID / passcode gate: on launch, on return from the background, and before sensitive commands.
 @Observable @MainActor
 final class AppLock {
-    private static let key = "appLockEnabled"
+    private nonisolated static let key = "appLockEnabled"
+
+    /// The saved setting, readable without the lock (e.g. when registering notification actions).
+    nonisolated static var isEnabledSetting: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
 
     var enabled: Bool {
         didSet {
             UserDefaults.standard.set(enabled, forKey: Self.key)
             if !enabled { isLocked = false }
+            Notifications.registerCategories(appLock: enabled)   // shell prompts' Allow depends on it
         }
     }
     private(set) var isLocked: Bool

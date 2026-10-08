@@ -14,6 +14,13 @@ enum Fmt {
         return String(format: "%.1fd", s / 86400)
     }
 
+    /// A running timer: "0:42", "12:05", "1:02:03".
+    static func clock(_ s: TimeInterval) -> String {
+        let t = Int(max(0, s))
+        return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60)
+                         : String(format: "%d:%02d", t / 60, t % 60)
+    }
+
     static func tokens(_ n: Double) -> String {
         switch n {
         case ..<1000: return "\(Int(n))"

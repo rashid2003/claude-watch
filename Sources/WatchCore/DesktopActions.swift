@@ -7,6 +7,12 @@ import Foundation
 public enum UILock {
     private static let lock = NSRecursiveLock()
     public static func run<T>(_ body: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return body() }
+    /// Runs `body` only if nothing else is driving a window right now.
+    public static func tryRun<T>(_ body: () -> T) -> T? {
+        guard lock.try() else { return nil }
+        defer { lock.unlock() }
+        return body()
+    }
 }
 
 /// Remote actions performed in a profile's own Claude window.

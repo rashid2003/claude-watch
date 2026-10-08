@@ -41,8 +41,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         case "reconnecting": RemoteStore(preview: Fixtures.snapshot, connection: .reconnecting, messages: Fixtures.messages)
         case "waiting": RemoteStore(preview: nil, connection: .connecting, paired: true)
         case "empty": RemoteStore(preview: Fixtures.emptySnapshot)
-        case "busy": RemoteStore(preview: Fixtures.busySnapshot, messages: Fixtures.messages)
-        default: RemoteStore(preview: Fixtures.snapshot, messages: Fixtures.messages)
+        case "busy": RemoteStore(preview: Fixtures.busySnapshot, messages: Fixtures.messages, work: Fixtures.work)
+        default: RemoteStore(preview: Fixtures.snapshot, messages: Fixtures.messages, work: Fixtures.work)
         }
         switch demo("demoToast") {
         case "ok": store.toast = Toast(message: "allowed · Bash", isError: false)
@@ -97,9 +97,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let action = response.actionIdentifier
 
         switch action {
-        case Notifications.Action.allow, Notifications.Action.deny:
-            guard let chatId, let promptId else { return }
-            let decision: PromptDecision = action == Notifications.Action.allow ? .allow : .deny
+        case Notifications.Action.allow, Notifications.Action.always, Notifications.Action.deny:
+            // The same command PromptCard sends; may run with the app launched in the background, no UI.
+            guard let chatId, let promptId, let decision = Notifications.decision(for: action) else { return }
             _ = await Notifications.runInBackground(.answer(chatId: chatId, promptId: promptId, decision: decision),
                                                     chatId: chatId)
         case Notifications.Action.cont:

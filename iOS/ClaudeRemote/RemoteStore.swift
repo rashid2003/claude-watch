@@ -25,7 +25,9 @@ final class RemoteStore {
     private(set) var snapshot: Snapshot?
     /// When the snapshot on screen arrived (from the Mac, or from the disk cache).
     private(set) var lastUpdated: Date?
-    private(set) var connection: Connection = .offline
+    private(set) var connection: Connection = .offline {
+        didSet { live.reachable(connection == .connected) }   // the Live Activity shows when the Mac is lost
+    }
     private(set) var bridgeStatus: BridgeStatus?
     private(set) var lastError: String?
 
@@ -35,6 +37,12 @@ final class RemoteStore {
     private(set) var olderCursor: Int?
     private(set) var loadingOlder = false
     private(set) var messagesLoaded = false
+    /// The transcript on screen came from the disk cache and the Mac's copy hasn't arrived yet.
+    private(set) var messagesStale = false
+    /// What the open chat is doing (running tools, subagents, background tasks), from the Mac's `.work`.
+    private(set) var work: LiveWork?
+    @ObservationIgnored private var cacheSave: Task<Void, Never>?
+    @ObservationIgnored private var prefetching = false
 
     private(set) var jobs: [String: Job] = [:]
     /// The Mac's resources while a view watches them (`watchSystem`), with up to 30 minutes of history.
@@ -51,6 +59,8 @@ final class RemoteStore {
     @ObservationIgnored private var streamTask: Task<Void, Never>?
     @ObservationIgnored private var socket: StreamSocket?
     @ObservationIgnored private var failures = 0
+    /// The wait between reconnect attempts; cancelled to retry at once.
+    @ObservationIgnored private var backoff: Task<Void, Never>?
     @ObservationIgnored private var lastMessageAt = Date()
     @ObservationIgnored private var messageIndex: [String: Int] = [:]
     @ObservationIgnored private var lastCacheWrite = Date.distantPast
@@ -72,8 +82,9 @@ final class RemoteStore {
 
     /// For previews: a store that never touches the network, Keychain or disk.
     init(preview snapshot: Snapshot?, connection: Connection = .connected, messages: [ChatMessage] = [],
-         paired: Bool = false) {
+         paired: Bool = false, work: LiveWork? = nil) {
         self.snapshot = snapshot
+        self.work = work
         self.lastUpdated = snapshot?.at
         self.connection = connection
         self.messages = messages
@@ -109,6 +120,7 @@ final class RemoteStore {
         connection = .connected
         messages = Fixtures.messages
         messagesLoaded = true
+        work = Fixtures.work
         system = Fixtures.system
         snapshot?.systemLevel = Fixtures.system.level
         olderCursor = nil
@@ -162,11 +174,20 @@ final class RemoteStore {
         streamTask = nil
         socket?.close()
         socket = nil
+        RelayProxy.shared.reset()
         if connection == .connected { connection = .reconnecting }
     }
 
-    /// Reconnect now instead of waiting for the backoff (pull to refresh, return to foreground).
+    /// Retry now instead of waiting out the backoff (pull to refresh, the retry buttons). An attempt
+    /// already under way is left to finish, so pulling or scrolling repeatedly doesn't restart it.
     func reconnect() {
+        guard client != nil else { return }
+        guard streamTask != nil else { return start() }
+        backoff?.cancel()
+    }
+
+    /// Drops the connection and opens a new one (changing how to reach the Mac).
+    func restart() {
         stop()
         start()
     }
@@ -183,7 +204,7 @@ final class RemoteStore {
         credentials = c
         self.client = RemoteClient(credentials: c)
         activePath = nil
-        reconnect()
+        restart()
     }
 
     func didPair(_ c: Credentials) {
@@ -222,6 +243,8 @@ final class RemoteStore {
         stop()
         Keychain.delete()
         SnapshotCache.clear()
+        MessageCache.clear()
+        LocalDrafts.clear()
         UserDefaults.standard.removeObject(forKey: Self.registeredTokenKey)
         live.paired(nil)
         credentials = nil
@@ -276,7 +299,11 @@ final class RemoteStore {
             failures += 1
             connection = failures < 3 ? .reconnecting : .offline
             await client.forgetBase()
-            try? await Task.sleep(for: .seconds(delay))
+            RelayProxy.shared.reset()
+            let wait = Task { _ = try? await Task.sleep(for: .seconds(delay)) }
+            backoff = wait
+            await wait.value
+            backoff = nil
             delay = min(delay * 2, 30)
         }
     }
@@ -305,6 +332,7 @@ final class RemoteStore {
         Task {
             await refreshStatus()
             await registerPushIfNeeded()
+            await prefetchRecent()
         }
     }
 
@@ -325,10 +353,15 @@ final class RemoteStore {
                 messages = msgs
                 olderCursor = before
                 rebuildIndex()
+                messagesStale = false
             } else {
                 upsert(msgs)
             }
             messagesLoaded = true
+            saveOpenChat(after: reset ? 0 : 2)
+        case .work(let chatId, let w):
+            guard chatId == openChatId else { return }
+            work = w
         case .job(let j):
             record(j)
         case .system(let h):
@@ -369,10 +402,20 @@ final class RemoteStore {
         guard openChatId != id else { return }
         openChatId = id
         if isPreview { return }
-        messages = []
-        messageIndex = [:]
-        olderCursor = nil
-        messagesLoaded = false
+        work = nil
+        cacheSave?.cancel()
+        if let cached = MessageCache.load(id) {
+            messages = cached.messages
+            olderCursor = cached.before
+            messagesLoaded = true
+            messagesStale = true
+        } else {
+            messages = []
+            olderCursor = nil
+            messagesLoaded = false
+            messagesStale = false
+        }
+        rebuildIndex()
         if let socket, connection == .connected {
             Task { try? await socket.send(WSClientMessage(type: .subscribe, chatId: id)) }
         }
@@ -380,6 +423,7 @@ final class RemoteStore {
 
     func close(chat id: String) {
         guard openChatId == id else { return }
+        if !isPreview, !isDemo, !messagesStale { saveOpenChat(after: 0) }
         openChatId = nil
         if let socket, connection == .connected {
             Task { try? await socket.send(WSClientMessage(type: .unsubscribe, chatId: id)) }
@@ -402,6 +446,34 @@ final class RemoteStore {
         }
     }
 
+    /// Writes the open chat's transcript to the disk cache, `after` seconds from now (coalesced).
+    private func saveOpenChat(after seconds: Double) {
+        guard let id = openChatId, !isPreview, !isDemo else { return }
+        let msgs = messages, cursor = olderCursor
+        cacheSave?.cancel()
+        cacheSave = Task.detached(priority: .utility) {
+            if seconds > 0 { try? await Task.sleep(for: .seconds(seconds)) }
+            guard !Task.isCancelled else { return }
+            MessageCache.save(id, messages: msgs, before: cursor)
+        }
+    }
+
+    /// Fetches the latest messages of the chats most likely to be opened next, so they open from cache.
+    private func prefetchRecent() async {
+        guard !prefetching, !isPreview, !isDemo, let snap = snapshot else { return }
+        prefetching = true
+        defer { prefetching = false }
+        let recent = snap.sessions.sorted { $0.info.lastActivityAt > $1.info.lastActivityAt }.prefix(6)
+        for s in recent where s.id != openChatId {
+            guard let client, connection == .connected else { return }
+            let cachedAt = await Task.detached(priority: .utility) { MessageCache.load(s.id)?.savedAt }.value
+            if let cachedAt, cachedAt >= s.info.lastActivityAt { continue }
+            guard let page = try? await client.messages(chatId: s.id, before: nil, limit: 200) else { continue }
+            let id = s.id
+            await Task.detached(priority: .utility) { MessageCache.save(id, messages: page.messages, before: page.before) }.value
+        }
+    }
+
     private func upsert(_ msgs: [ChatMessage]) {
         for m in msgs {
             if let i = messageIndex[m.id], i < messages.count, messages[i].id == m.id {
@@ -415,6 +487,14 @@ final class RemoteStore {
 
     private func rebuildIndex() {
         messageIndex = Dictionary(messages.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { _, b in b })
+    }
+
+    // MARK: Drafts
+
+    /// Tells the Mac what's in a chat's composer, so it shows there. Best effort: false when it didn't arrive.
+    func postDraft(chatId: String, text: String) async -> Bool {
+        guard !isPreview, !isDemo, let client, canSend else { return false }
+        return (try? await client.setDraft(chatId: chatId, text: text)) != nil
     }
 
     // MARK: Commands

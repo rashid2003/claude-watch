@@ -11,7 +11,7 @@ enum Fixtures {
 
     static func session(_ id: String, profile: String, title: String, cwd: String, minutesAgo: Double,
                         activity: SessionStatus.Activity, last: TranscriptTail.Last = .assistantDone,
-                        tasks: [TaskItem] = [], limit: RateLimitHit? = nil) -> SessionStatus {
+                        tasks: [TaskItem] = [], limit: RateLimitHit? = nil, work: LiveWork? = nil) -> SessionStatus {
         let at = now.addingTimeInterval(-minutesAgo * 60)
         return SessionStatus(
             info: SessionInfo(id: id, cliSessionId: "cli-\(id)", priorCliSessionIds: [], profileId: profile,
@@ -20,8 +20,26 @@ enum Fixtures {
                               desktopErrorAt: nil, hasPendingPermission: false, folder: "acct-\(profile)/org-1"),
             activity: activity,
             tail: TranscriptTail(last: last, lastAt: at, lastRateLimit: limit, lastSuccessAt: at),
-            tasks: tasks, tokens5h: 120_000, tokens7d: 2_400_000)
+            tasks: tasks, tokens5h: 120_000, tokens7d: 2_400_000, work: work)
     }
+
+    /// A busy chat as the open-chat panel sees it: a command running, subagents and background tasks.
+    static let work = LiveWork(
+        running: [RunningTool(id: "t1", name: "Bash", summary: "Bash: swift test --parallel",
+                              startedAt: now.addingTimeInterval(-42))],
+        agents: [
+            AgentRun(id: "a1", description: "Survey the transcript parser", type: "Explore",
+                     step: "Searched “isSidechain”", steps: 14, startedAt: now.addingTimeInterval(-185)),
+            AgentRun(id: "a2", description: "Write the relay docs", type: "general-purpose", background: true,
+                     step: "Edited docs/RELAY.md", steps: 6, startedAt: now.addingTimeInterval(-95)),
+            AgentRun(id: "a3", description: "Check the Live Activity widget", type: "Explore", status: .done,
+                     steps: 9, startedAt: now.addingTimeInterval(-400), endedAt: now.addingTimeInterval(-250)),
+        ],
+        shells: [
+            BackgroundShell(id: "b1", summary: "Start the relay dev server", startedAt: now.addingTimeInterval(-610)),
+            BackgroundShell(id: "b2", kind: .monitor, summary: "watch the TestFlight upload",
+                            startedAt: now.addingTimeInterval(-300)),
+        ])
 
     static let sessions: [String: [SessionStatus]] = [
         "default": [
@@ -29,7 +47,8 @@ enum Fixtures {
                     minutesAgo: 1, activity: .working, last: .assistantTool,
                     tasks: [TaskItem(id: "1", subject: "Write server", status: .completed),
                             TaskItem(id: "2", subject: "Run tests", activeForm: "Running swift test", status: .in_progress),
-                            TaskItem(id: "3", subject: "Update docs", status: .pending)]),
+                            TaskItem(id: "3", subject: "Update docs", status: .pending)],
+                    work: work.brief),
             session("local_a2", profile: "default", title: "Fix DNS for mail", cwd: "/Users/rashid/Development/infra",
                     minutesAgo: 4, activity: .waiting, last: .assistantTool),
         ],
@@ -94,7 +113,9 @@ enum Fixtures {
                                 toolName: "Bash", summary: "dig +short MX lajward.dev",
                                 detail: "dig +short MX lajward.dev && dig +short TXT _dmarc.lajward.dev",
                                 source: .desktop, kind: .permission, at: now.addingTimeInterval(-200),
-                                canAllowAlways: true)])
+                                canAllowAlways: true)],
+        replies: [QueuedReply(id: "q1", chatId: "local_a2", text: "also check the DKIM record",
+                              at: now.addingTimeInterval(-30))])
 
     /// Accounts but no chats, prompts, retries or moves: for the empty states.
     static var emptySnapshot: Snapshot {

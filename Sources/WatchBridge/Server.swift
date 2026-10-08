@@ -5,6 +5,7 @@ import WatchProtocol
 /// Something the phone asked the Mac to do.
 public enum BridgeCommand: Sendable {
     case reply(chatId: String, text: String)
+    case cancelReply(id: String)
     case answer(chatId: String, promptId: String, decision: PromptDecision)
     case stop(chatId: String)
     case newChat(profileId: String, cwd: String, prompt: String)
@@ -24,6 +25,7 @@ public enum BridgeCommand: Sendable {
     public var name: String {
         switch self {
         case .reply: "reply"
+        case .cancelReply: "cancel-reply"
         case .answer: "prompt"
         case .stop: "stop"
         case .newChat: "new-chat"
@@ -46,7 +48,7 @@ public enum BridgeCommand: Sendable {
         switch self {
         case .reply(let c, _), .answer(let c, _, _), .stop(let c): c
         case .newChat(let p, _, _), .setMode(let p, _): p
-        case .retry(let i), .cancelRetry(let i): i
+        case .retry(let i), .cancelRetry(let i), .cancelReply(let i): i
         case .move(let s, _): s
         case .undoMove(let i), .cancelMove(let i): i
         case .restartMoves, .closeIdleClaude: nil
@@ -61,6 +63,12 @@ public enum BridgeCommand: Sendable {
 /// A live feed of one chat's messages (ChatFeed on the Mac).
 public protocol MessageSource: AnyObject {
     func poll() -> [ChatMessage]
+    /// What the chat is doing as of the last poll; nil if the source doesn't follow it.
+    var liveWork: LiveWork? { get }
+}
+
+public extension MessageSource {
+    var liveWork: LiveWork? { nil }
 }
 
 /// What the bridge needs from the app. Called on the bridge's queue; implementations must be thread-safe
@@ -78,6 +86,12 @@ public protocol BridgeHandler: AnyObject {
     /// Refuse a command up front: (HTTP status, message), or nil to accept it.
     func check(_ command: BridgeCommand) -> (Int, String)?
     func perform(_ command: BridgeCommand, device: Device, done: @escaping (JobStatus, String?) -> Void)
+    /// The phone's unsent text for a chat (empty clears it). False when the chat is unknown.
+    func setDraft(chatId: String, text: String, device: Device) -> Bool
+}
+
+extension BridgeHandler {
+    public func setDraft(chatId: String, text: String, device: Device) -> Bool { false }
 }
 
 public final class BridgeServer: @unchecked Sendable {
@@ -197,9 +211,16 @@ public final class BridgeServer: @unchecked Sendable {
         }
     }
 
+    /// Chats some connected phone is subscribed to right now.
+    public var watchedChats: Set<String> {
+        queue.sync { Set(conns.values.compactMap { $0.isSocket ? $0.feed?.0 : nil }) }
+    }
+
     /// Forgets a device and drops its connections.
-    public func revoke(deviceId: String) {
+    public func revoke(deviceId: String, by who: String = "mac") {
+        let name = devices.all.first { $0.id == deviceId }?.name ?? deviceId
         devices.remove(id: deviceId)
+        audit.append(device: name, command: "revoke", target: deviceId, result: "by \(who)")
         queue.async { [self] in
             for c in conns.values where c.device?.id == deviceId { c.close() }
         }
@@ -219,7 +240,16 @@ public final class BridgeServer: @unchecked Sendable {
                 WSServerMessage.messages(chatId: chatId, messages: new, reset: false, before: nil)) {
                 c.sendText(data)
             }
+            sendWork(c, chatId, feed)
         }
+    }
+
+    /// The chat's live work, when it changed since the last one sent on this connection.
+    private func sendWork(_ c: Conn, _ chatId: String, _ feed: MessageSource) {
+        guard let w = feed.liveWork, w != c.sentWork,
+              let data = try? WireCoder.encoder.encode(WSServerMessage.work(chatId: chatId, work: w)) else { return }
+        c.sentWork = w
+        c.sendText(data)
     }
 
     private func pingAll() {
@@ -234,6 +264,7 @@ public final class BridgeServer: @unchecked Sendable {
         var isSocket = false
         var device: Device?
         var feed: (String, MessageSource)?
+        var sentWork: LiveWork?
         var watchingSystem = false
         weak var server: BridgeServer?
 
@@ -316,18 +347,20 @@ public final class BridgeServer: @unchecked Sendable {
             case .ping:
                 if let id = conn.device?.id { devices.touch(id) }   // tells the Live Activity driver the app is open
                 if let d = try? WireCoder.encoder.encode(WSServerMessage.pong) { conn.sendText(d) }
-            case .unsubscribe: conn.feed = nil
+            case .unsubscribe: conn.feed = nil; conn.sentWork = nil
             case .unwatchSystem: conn.watchingSystem = false
             case .watchSystem:
                 conn.watchingSystem = true
                 if let h = handler?.systemHealth(), let d = try? WireCoder.encoder.encode(WSServerMessage.system(h)) { conn.sendText(d) }
             case .subscribe:
+                conn.sentWork = nil
                 guard let id = m.chatId, let sub = handler?.subscribe(chatId: id) else { conn.feed = nil; return }
                 conn.feed = (id, sub.source)
                 let start = max(0, sub.initial.count - Self.initialBatch)
                 let msg = WSServerMessage.messages(chatId: id, messages: Array(sub.initial[start...]), reset: true,
                                                    before: start > 0 ? start : nil)
                 if let d = try? WireCoder.encoder.encode(msg) { conn.sendText(d) }
+                sendWork(conn, id, sub.source)
             }
         default: break
         }
@@ -402,8 +435,12 @@ public final class BridgeServer: @unchecked Sendable {
             }
             onDevicesChanged?()
             return .json(handler.status(for: devices.all.first { $0.id == device.id } ?? device))
+        case ("POST", 3, "chats") where p[2] == "draft":
+            // Not a job: drafts arrive often and need no status or audit entry.
+            guard let b = req.decode(DraftBody.self) else { return .error(400, "Bad body") }
+            return handler.setDraft(chatId: p[1], text: b.text, device: device) ? HTTPResponse(status: 204) : .error(404, "No such chat")
         case ("DELETE", 2, "devices") where p[1] == "self":
-            revoke(deviceId: device.id)
+            revoke(deviceId: device.id, by: "phone")
             return HTTPResponse(status: 204)
         case ("POST", _, _):
             return command(req, p, device, handler)
@@ -425,6 +462,7 @@ public final class BridgeServer: @unchecked Sendable {
         case ("chats", 3, "prompt"):
             cmd = req.decode(PromptAnswerBody.self).map { .answer(chatId: p[1], promptId: $0.promptId, decision: $0.decision) }
         case ("chats", 3, "stop"): cmd = .stop(chatId: p[1])
+        case ("replies", 3, "cancel"): cmd = .cancelReply(id: p[1])
         case ("queue", 3, "retry"): cmd = .retry(itemId: p[1])
         case ("queue", 3, "cancel"): cmd = .cancelRetry(itemId: p[1])
         case ("accounts", 3, "mode"): cmd = req.decode(ModeBody.self).map { .setMode(profileId: p[1], mode: $0.mode) }
