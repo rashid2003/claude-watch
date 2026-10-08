@@ -129,9 +129,8 @@ public enum AppGrouper {
                 // Claude Code sessions run from a bare "claude.app" inside the desktop app's data folder.
                 name = appName(key) ?? (key.contains("/claude-code/") ? "Claude Code"
                     : ((key as NSString).lastPathComponent as NSString).deletingPathExtension)
-                let running = appPid(key)
-                main = running ?? members.map(\.0.pid).min()!
-                canQuit = running != nil
+                main = appPid(key) ?? members.map(\.0.pid).min()!
+                canQuit = true   // NSRunningApplication.terminate, else a polite SIGTERM to the main process
             }
             return AppUsage(id: key, name: name, rss: members.reduce(0) { $0 + $1.0.footprint },
                             cpu: members.reduce(0) { $0 + $1.cpu }, processes: members.count,

@@ -27,6 +27,9 @@ final class ProcessScanTests: XCTestCase {
         XCTAssertEqual(chrome.mainPid, 100)
         XCTAssertTrue(chrome.canQuit)
         XCTAssertEqual(chrome.pids, [101, 100])
+        XCTAssertTrue(AppGrouper.group([p(5, "/Applications/Android Studio.app/Contents/MacOS/studio", mb: 9)], appPid: { _ in nil },
+                                       appName: { _ in nil }, claudeNames: [:], guardFn: { _ in true }).first!.canQuit,
+                      "a bundle without NSRunningApplication can still be asked to quit")
         XCTAssertEqual(rows[0].id, "pid:200")
         XCTAssertFalse(rows[0].canQuit)
     }

@@ -38,6 +38,11 @@ public enum SystemActions {
                 app.terminate()
                 pids.append(app.processIdentifier)
             }
+            // Apps launched from a script (Android Studio, Java tools) have no NSRunningApplication: SIGTERM the main process.
+            if pids.isEmpty, let main = apps.first(where: { $0.id == id })?.mainPid, KillGuard.allowsLive(pid: main).ok,
+               Darwin.kill(main, SIGTERM) == 0 {
+                pids = [main]
+            }
         } else if !id.hasPrefix("pid:") {
             // A loose process by name (auto-act list): SIGTERM each of the user's own copies.
             for p in ProcessTree.all() {
