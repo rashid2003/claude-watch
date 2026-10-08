@@ -468,7 +468,20 @@ final class RemoteStore {
 
     func refreshStatus() async {
         guard let client else { return }
-        if let s = try? await client.status() { bridgeStatus = s }
+        guard let s = try? await client.status() else { return }
+        bridgeStatus = s
+        if let r = s.relay { await adoptRelay(r) }
+    }
+
+    /// A phone paired before the relay existed learns its room and key from the Mac, so it no longer needs Tailscale.
+    private func adoptRelay(_ r: RelayInfo) async {
+        guard !isPreview, !isDemo, let client else { return }
+        var c = await client.credentials
+        guard c.relay != r else { return }
+        c.relay = r
+        Keychain.save(c)
+        credentials = c
+        self.client = RemoteClient(credentials: c)
     }
 
     // MARK: Device settings

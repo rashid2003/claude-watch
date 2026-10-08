@@ -180,7 +180,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         }
         if Self.cliPath() == nil { w.append("claude-watch CLI not found, so background replies can't ask you about tools.") }
         return BridgeStatus(macName: server.macName, version: Self.version, warnings: w, pushConfigured: pusher.isConfigured,
-                            deviceId: device.id, notify: device.notify)
+                            deviceId: device.id, notify: device.notify, relay: relay?.info)
     }
 
     private func transcript(_ chatId: String) -> URL? {

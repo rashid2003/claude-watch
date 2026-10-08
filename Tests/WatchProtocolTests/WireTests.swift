@@ -71,4 +71,12 @@ final class WireTests: XCTestCase {
         let p = PairingPayload(macName: "Mac", hosts: ["mac.tail1.ts.net", "100.64.0.2"], port: 7433, code: "123456")
         XCTAssertEqual(try roundTrip(p), p)
     }
+
+    func testStatusCarriesRelayAndOldStatusDecodes() throws {
+        let info = RelayInfo(url: "wss://relay.example", macId: String(repeating: "a", count: 26), macKey: "a2V5")
+        let s = BridgeStatus(macName: "Mac", version: "1", warnings: [], pushConfigured: true, relay: info)
+        XCTAssertEqual(try WireCoder.decoder.decode(BridgeStatus.self, from: WireCoder.encoder.encode(s)).relay, info)
+        let old = #"{"macName":"Mac","version":"1","warnings":[],"pushConfigured":false,"notify":{}}"#
+        XCTAssertNil(try WireCoder.decoder.decode(BridgeStatus.self, from: Data(old.utf8)).relay)
+    }
 }
