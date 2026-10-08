@@ -25,7 +25,9 @@ final class RemoteStore {
     private(set) var snapshot: Snapshot?
     /// When the snapshot on screen arrived (from the Mac, or from the disk cache).
     private(set) var lastUpdated: Date?
-    private(set) var connection: Connection = .offline
+    private(set) var connection: Connection = .offline {
+        didSet { live.reachable(connection == .connected) }   // the Live Activity shows when the Mac is lost
+    }
     private(set) var bridgeStatus: BridgeStatus?
     private(set) var lastError: String?
 

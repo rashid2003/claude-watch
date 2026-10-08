@@ -4,15 +4,20 @@ import WatchProtocol
 import WidgetKit
 
 /// Lock Screen banner, Dynamic Island, and (macOS 26+, phone nearby) the Mac's menu bar.
+///
+/// Stale (no push from the Mac before its stale date) or marked disconnected by the app, it dims the numbers and
+/// says when the Mac was last seen.
 struct LimitsLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: LimitsActivityAttributes.self) { context in
-            LockScreenLimits(limits: context.state, macName: context.attributes.macName, stale: context.isStale)
+            LockScreenLimits(limits: context.state, macName: context.attributes.macName,
+                             offline: context.isStale || context.state.disconnected)
                 .activityBackgroundTint(WTheme.graphite.opacity(0.92))
                 .activitySystemActionForegroundColor(WTheme.clay)
         } dynamicIsland: { context in
             let l = context.state
             let head = l.headline
+            let offline = context.isStale || l.disconnected
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 5) {
@@ -23,20 +28,22 @@ struct LimitsLiveActivity: Widget {
                     .padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    StatusTags(limits: l).font(WTheme.mono(12, .semibold)).padding(.trailing, 4)
+                    StatusTags(limits: l, offline: offline).font(WTheme.mono(12, .semibold)).padding(.trailing, 4)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 6) {
-                        ForEach(l.accounts.prefix(3)) { AccountLine(account: $0, compact: true) }
-                        if context.isStale { StaleNote() }
+                        ForEach(l.accounts.prefix(3)) { AccountLine(account: $0, compact: true).dimmed(offline) }
+                        if offline { OfflineNote(lastSeen: l.updatedDate) }
                     }
                     .padding(.horizontal, 4)
                     .padding(.top, 2)
                 }
             } compactLeading: {
                 HStack(spacing: 3) {
-                    Text("✻").foregroundStyle(WTheme.clay)
-                    if let head, head.state == .limited {
+                    Text("✻").foregroundStyle(offline ? WTheme.dim : WTheme.clay)
+                    if offline {
+                        Text(WTheme.percent(head?.five)).foregroundStyle(WTheme.dim)
+                    } else if let head, head.state == .limited {
                         Text("lim").foregroundStyle(WTheme.red)
                     } else {
                         Text(WTheme.percent(head?.five)).foregroundStyle(WTheme.level(head?.five))
@@ -45,7 +52,9 @@ struct LimitsLiveActivity: Widget {
                 .font(WTheme.mono(13, .semibold))
             } compactTrailing: {
                 Group {
-                    if let head, head.state == .limited, let until = head.limitedUntilDate, until > Date() {
+                    if offline {
+                        Text("offline").foregroundStyle(WTheme.dim)
+                    } else if let head, head.state == .limited, let until = head.limitedUntilDate, until > Date() {
                         Text(timerInterval: Date()...until, countsDown: true, showsHours: true)
                             .monospacedDigit()
                             .multilineTextAlignment(.trailing)
@@ -63,7 +72,8 @@ struct LimitsLiveActivity: Widget {
                     Text("✻")
                 }
                 .gaugeStyle(.accessoryCircularCapacity)
-                .tint(head?.state == .limited ? WTheme.red : WTheme.level(head?.pressure))
+                .tint(offline ? Color.gray : head?.state == .limited ? WTheme.red : WTheme.level(head?.pressure))
+                .opacity(offline ? 0.5 : 1)
             }
             .keylineTint(WTheme.clay)
         }
@@ -74,7 +84,7 @@ struct LimitsLiveActivity: Widget {
 struct LockScreenLimits: View {
     let limits: LiveLimits
     let macName: String
-    var stale = false
+    var offline = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -83,14 +93,14 @@ struct LockScreenLimits: View {
                 Text("session-watch").fontWeight(.semibold)
                 Text(macName).foregroundStyle(WTheme.dim).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 4)
-                StatusTags(limits: limits)
+                StatusTags(limits: limits, offline: offline)
             }
             .font(WTheme.mono(12))
-            ForEach(limits.accounts) { AccountLine(account: $0, compact: limits.accounts.count > 2) }
+            ForEach(limits.accounts) { AccountLine(account: $0, compact: limits.accounts.count > 2).dimmed(offline) }
             if limits.hidden > 0 {
                 Text("+\(limits.hidden) more").font(WTheme.mono(10)).foregroundStyle(WTheme.dim)
             }
-            if stale { StaleNote() }
+            if offline { OfflineNote(lastSeen: limits.updatedDate) }
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 14)
@@ -98,17 +108,27 @@ struct LockScreenLimits: View {
     }
 }
 
-/// "◆2  3 working" — what needs you, at a glance.
+/// "◆2  3 working" — what needs you, at a glance. Just "offline" when the numbers can't be trusted.
 struct StatusTags: View {
     let limits: LiveLimits
+    var offline = false
     var body: some View {
         HStack(spacing: 6) {
-            if limits.prompts > 0 { Text("◆\(limits.prompts)").foregroundStyle(WTheme.clay) }
-            if limits.working > 0 { Text("\(limits.working) working").foregroundStyle(WTheme.yellow) }
-            if limits.prompts == 0 && limits.working == 0 { Text("idle").foregroundStyle(WTheme.dim) }
+            if offline {
+                Text("○ offline").foregroundStyle(WTheme.dim)
+            } else if limits.prompts > 0 || limits.working > 0 {
+                tags
+            } else {
+                Text("idle").foregroundStyle(WTheme.dim)
+            }
         }
         .lineLimit(1)
         .fixedSize()
+    }
+
+    @ViewBuilder private var tags: some View {
+        if limits.prompts > 0 { Text("◆\(limits.prompts)").foregroundStyle(WTheme.clay) }
+        if limits.working > 0 { Text("\(limits.working) working").foregroundStyle(WTheme.yellow) }
     }
 }
 
@@ -168,10 +188,26 @@ struct AccountLine: View {
     }
 }
 
-struct StaleNote: View {
+/// "Mac offline · last seen 6:12", from when the Mac took its last snapshot (with the weekday if not today).
+struct OfflineNote: View {
+    let lastSeen: Date
     var body: some View {
-        Text("… waiting for the Mac").font(WTheme.mono(10)).foregroundStyle(WTheme.dim)
+        let today = Calendar.current.isDateInToday(lastSeen)
+        HStack(spacing: 0) {
+            Text("Mac offline").foregroundStyle(WTheme.red)
+            Text(" · last seen ")
+            Text(lastSeen, format: today ? .dateTime.hour().minute() : .dateTime.weekday().hour().minute())
+        }
+        .font(WTheme.mono(10))
+        .foregroundStyle(WTheme.dim)
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
     }
+}
+
+extension View {
+    /// Greys out numbers that may be out of date.
+    func dimmed(_ on: Bool) -> some View { saturation(on ? 0 : 1).opacity(on ? 0.45 : 1) }
 }
 
 #if DEBUG
@@ -179,5 +215,10 @@ struct StaleNote: View {
     LimitsLiveActivity()
 } contentStates: {
     LiveLimits.sample
+    LiveLimits.sampleOffline
+}
+
+private extension LiveLimits {
+    static var sampleOffline: LiveLimits { var l = sample; l.connected = false; return l }
 }
 #endif
