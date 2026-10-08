@@ -193,7 +193,7 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
     }
 
     func open(sessionId: String, profileId: String) {
-        guard profileId != Profile.terminalId else { return }   // lives in a terminal, not a window
+        guard !Profile.isTerminalId(profileId) else { return }   // lives in a terminal, not a window
         monitor.perform { m in
             if let p = m.profile(id: profileId) { DesktopLink.reveal(sessionId: sessionId, profile: p) }
         }

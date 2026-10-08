@@ -149,6 +149,135 @@ final class TerminalSessionsTests: XCTestCase {
         XCTAssertEqual(groups[2].members.map(\.id), [Profile.terminalId])
     }
 
+    // MARK: Several CLI config dirs
+
+    /// A fake home: `name` dirs with an optional login (`<dir>/.claude.json`, or `~/.claude.json` for
+    /// `.claude`) and optional `projects/`.
+    @discardableResult
+    func makeDir(_ home: URL, _ name: String, account: String? = nil, org: String? = nil, projects: Bool = false) throws -> URL {
+        let fm = FileManager.default
+        let d = home.appendingPathComponent(name)
+        try fm.createDirectory(at: d, withIntermediateDirectories: true)
+        if projects { try fm.createDirectory(at: d.appendingPathComponent("projects/-Users-me-app"), withIntermediateDirectories: true) }
+        if let account {
+            let file = name == ".claude" ? home.appendingPathComponent(".claude.json") : d.appendingPathComponent(".claude.json")
+            var oa: [String: Any] = ["accountUuid": account, "emailAddress": "\(account)@example.com"]
+            if let org { oa["organizationUuid"] = org; oa["organizationName"] = "Org \(org)" }
+            try line(["oauthAccount": oa]).write(to: file, atomically: true, encoding: .utf8)
+        }
+        return d
+    }
+
+    func testDiscoversEveryCLIConfigDir() throws {
+        let home = dir.appendingPathComponent("home")
+        try makeDir(home, ".claude", account: "acc-2", org: "org-h", projects: true)
+        try makeDir(home, ".claude-1", account: "acc-2", org: "org-p")
+        try makeDir(home, ".claude-3", projects: true)                      // transcripts, signed out since
+        try makeDir(home, ".claude-4")                                      // never signed in: not yet
+        let science = try makeDir(home, ".claude-science", projects: false) // another tool's data
+        try line(["numStartups": 1]).write(to: science.appendingPathComponent(".claude.json"), atomically: true, encoding: .utf8)
+        try "x".write(to: home.appendingPathComponent(".claude-notes"), atomically: true, encoding: .utf8)
+
+        let dirs = CLIConfigDir.discover(home: home, env: [:])
+        XCTAssertEqual(dirs.map(\.shortName), ["claude", "claude-1", "claude-3"])
+        XCTAssertEqual(dirs.map(\.profileId), [Profile.terminalId, "terminal:claude-1", "terminal:claude-3"])
+        XCTAssertEqual(dirs.map(\.isDefault), [true, false, false])
+        XCTAssertEqual(dirs[0].accountFile, home.appendingPathComponent(".claude.json"))
+        XCTAssertEqual(dirs[1].accountFile, home.appendingPathComponent(".claude-1/.claude.json"))
+        XCTAssertEqual(dirs[0].identity, "acc-2/org-h")
+        XCTAssertEqual(dirs[1].identity, "acc-2/org-p")
+        XCTAssertEqual(dirs[1].account?.email, "acc-2@example.com")
+        XCTAssertEqual(dirs[1].account?.orgName, "Org org-p")
+        XCTAssertNil(dirs[2].account)
+        XCTAssertEqual(dirs[2].identity, "terminal:claude-3", "signed out: its own account")
+        XCTAssertEqual(dirs.map(\.env), [nil, home.appendingPathComponent(".claude-1").path, home.appendingPathComponent(".claude-3").path])
+        XCTAssertEqual(dirs[1].profile.name, "Terminal (claude-1)")
+        XCTAssertTrue(dirs.allSatisfy { $0.profile.isTerminal })
+
+        // CLAUDE_CONFIG_DIR makes another dir the default; ~/.claude then is one of the others.
+        let moved = CLIConfigDir.discover(home: home, env: ["CLAUDE_CONFIG_DIR": home.appendingPathComponent(".claude-1").path])
+        XCTAssertEqual(moved.map(\.profileId), [Profile.terminalId, "terminal:claude", "terminal:claude-3"])
+        XCTAssertEqual(moved[0].identity, "acc-2/org-p")
+        XCTAssertEqual(moved[1].identity, "acc-2/org-h")
+        XCTAssertNil(moved[1].env, "~/.claude runs with CLAUDE_CONFIG_DIR unset")
+
+        // A fresh Mac: just the default dir, not signed in.
+        let empty = CLIConfigDir.discover(home: dir.appendingPathComponent("nobody"), env: [:])
+        XCTAssertEqual(empty.map(\.profileId), [Profile.terminalId])
+        XCTAssertNil(empty[0].account)
+
+        XCTAssertEqual(CLIConfigDir.profile(id: "terminal:claude-1", home: home, env: [:])?.dataDir.lastPathComponent, ".claude-1")
+        XCTAssertEqual(CLIConfigDir.profile(id: Profile.terminalId, home: home, env: [:])?.dataDir.lastPathComponent, ".claude")
+        XCTAssertNil(CLIConfigDir.profile(id: "terminal:claude-4", home: home, env: [:]))
+        XCTAssertNil(CLIConfigDir.profile(id: "account-1", home: home, env: [:]))
+    }
+
+    func testTerminalIds() {
+        XCTAssertTrue(Profile.isTerminalId("terminal"))
+        XCTAssertTrue(Profile.isTerminalId("terminal:claude-1"))
+        XCTAssertFalse(Profile.isTerminalId("terminals"))
+        XCTAssertFalse(Profile.isTerminalId("account-1"))
+        var s = TerminalSessionIndex.info(id: termId, meta: TranscriptMeta(), mtime: Date(), entry: nil,
+                                          accountUuid: "a", profileId: "terminal:claude-3")
+        XCTAssertEqual(s.profileId, "terminal:claude-3")
+        s.isTerminal = nil   // from an older Mac: the profile id alone says so
+        XCTAssertTrue(s.isTerminalChat)
+    }
+
+    func testChatsAreFiledUnderTheirDirAndNeverDuplicated() throws {
+        let home = dir.appendingPathComponent("home")
+        try makeDir(home, ".claude", account: "acc-2", org: "org-h", projects: true)
+        try makeDir(home, ".claude-1", account: "acc-2", org: "org-p", projects: true)
+        let dirs = CLIConfigDir.discover(home: home, env: [:])
+        func put(_ d: CLIConfigDir, _ id: String, age: TimeInterval) {
+            let url = d.projects.appendingPathComponent("-Users-me-app/\(id).jsonl")
+            try! (user("hi from \(d.shortName)", entrypoint: "cli") + "\n").write(to: url, atomically: true, encoding: .utf8)
+            try! FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-age)], ofItemAtPath: url.path)
+        }
+        put(dirs[0], termId, age: 60)
+        put(dirs[1], scriptId, age: 60)
+        // A chat copied between the dirs: the newer transcript (here ~/.claude-1's) owns it.
+        put(dirs[0], oldId, age: 600)
+        put(dirs[1], oldId, age: 30)
+
+        let perDir = dirs.map { d -> (profileId: String, sessions: [SessionInfo], live: [RegistryEntry]) in
+            let live = [RegistryEntry(pid: 7, sessionId: oldId, cwd: "/Users/me/app", status: "busy")]
+            return (d.profileId, TerminalSessionIndex(d, isAlive: { _ in true })
+                .sessions(excluding: [], live: [], accountUuid: d.identity, profileId: d.profileId), live)
+        }
+        let merged = CLIConfigDir.merge(perDir)
+        let byId = Dictionary(uniqueKeysWithValues: merged.sessions.map { ($0.id, $0) })
+        XCTAssertEqual(merged.sessions.count, 3)
+        XCTAssertEqual(byId[termId]?.profileId, Profile.terminalId)
+        XCTAssertEqual(byId[termId]?.accountUuid, "acc-2/org-h")
+        XCTAssertEqual(byId[scriptId]?.profileId, "terminal:claude-1")
+        XCTAssertEqual(byId[scriptId]?.accountUuid, "acc-2/org-p")
+        XCTAssertEqual(byId[oldId]?.profileId, "terminal:claude-1")
+        XCTAssertEqual(byId[oldId]?.title, "hi from claude-1")
+        XCTAssertEqual(merged.live.count, 1, "only the owning dir's registry entry")
+
+        // The transcript scanner reads the same dir's file for it.
+        let located = TranscriptScanner.locate(dirs.map(\.projects))
+        let real: (URL?) -> String? = { $0?.resolvingSymlinksInPath().path }
+        XCTAssertEqual(real(located[oldId]?.first), real(dirs[1].projects.appendingPathComponent("-Users-me-app/\(oldId).jsonl")))
+        XCTAssertEqual(real(located[termId]?.first?.deletingLastPathComponent().deletingLastPathComponent()), real(dirs[0].projects))
+        XCTAssertNotNil(located[scriptId])
+    }
+
+    func testEachDirsTerminalJoinsItsOwnAccount() {
+        let personal = Profile(id: "account-1", name: "Personal", dataDir: URL(fileURLWithPath: "/tmp/p"))
+        let hamagan = Profile(id: "account-2", name: "Hamagan", dataDir: URL(fileURLWithPath: "/tmp/h"))
+        let t1 = Profile(id: "terminal:claude-1", name: "Terminal (claude-1)", dataDir: URL(fileURLWithPath: "/tmp/.claude-1"))
+        let t3 = Profile(id: "terminal:claude-3", name: "Terminal (claude-3)", dataDir: URL(fileURLWithPath: "/tmp/.claude-3"))
+        let accounts = ["account-1": "acc-1/org-p", "account-2": "acc-1/org-h", Profile.terminalId: "acc-1/org-h",
+                        "terminal:claude-1": "acc-1/org-p", "terminal:claude-3": "acc-3/org-h"]
+        let groups = Monitor.accountGroups([personal, hamagan, .terminal, t1, t3], accounts: accounts)
+        XCTAssertEqual(groups.map(\.key), ["acc-1/org-p", "acc-1/org-h", "acc-3/org-h"])
+        XCTAssertEqual(groups[0].members.map(\.id), ["account-1", "terminal:claude-1"])
+        XCTAssertEqual(groups[1].members.map(\.id), ["account-2", Profile.terminalId])
+        XCTAssertEqual(groups[2].members.map(\.id), ["terminal:claude-3"], "no desktop window on that account")
+    }
+
     func testTerminalProfileHasNoWindow() {
         let inst = [ClaudeProcesses.Instance(pid: 42, dataDir: nil), ClaudeProcesses.Instance(pid: 43, dataDir: Paths.claudeHome.path)]
         XCTAssertNil(ClaudeProcesses.pid(for: .terminal, in: inst))

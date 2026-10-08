@@ -268,28 +268,36 @@ case "profiles":
     }
 
 case "terminal":
-    // Read-only: what Session Watch sees of Claude Code sessions run in a terminal.
-    let index = TerminalSessionIndex()
-    let registry = index.registry()
-    let live = index.liveEntries()
-    let account = CLIAccount.read()
-    print(A.bold("CLI account  ") + (account.map { ($0.email ?? "?") + A.dim("  " + $0.identity) } ?? A.dim("not signed in")))
-    print(A.bold("Prompt hook  ") + (PromptHookInstaller.isInstalled(settings: Paths.claudeSettings)
-                                     ? A.green("installed") : A.dim("off")) + A.dim("  " + Paths.claudeSettings.path))
-    print(A.bold("Registry     ") + "\(registry.count) running session\(registry.count == 1 ? "" : "s") · "
-          + "\(registry.filter(\.isDesktop).count) desktop · \(live.count) terminal")
+    // Read-only: what Session Watch sees of Claude Code sessions run in a terminal, per CLI config dir.
     let cfg = Config.load()
     let sessionIndex = SessionIndex()
     let desktopIds = Set(ProfileDiscovery.discover(config: cfg).flatMap { sessionIndex.sessions(for: $0) }
         .flatMap { s in s.priorCliSessionIds + [s.cliSessionId].compactMap { $0 } })
-    let chats = index.sessions(excluding: desktopIds, live: live, accountUuid: account?.identity ?? Profile.terminalId)
-    print("")
-    if chats.isEmpty { print(A.dim("No terminal chats in the last 7 days.")) }
+    let dirs = CLIConfigDir.discover()
     let w = min(termWidth(), 110)
-    for s in chats {
-        let state = s.openInTerminal == true ? A.green("open") : A.dim(Fmt.ago(s.lastActivityAt))
-        let lhs = "  " + A.clay("▸") + " " + A.trunc(s.title, max(10, w - 60)) + A.dim(" · " + A.trunc((s.cwd as NSString).lastPathComponent, 18))
-        print(A.pad(lhs, w - 48) + A.pad(state, 10) + A.dim(s.id))
+    for (i, d) in dirs.enumerated() {
+        let index = TerminalSessionIndex(d)
+        let registry = index.registry()
+        let live = index.liveEntries()
+        if i > 0 { print("") }
+        print(A.bold(A.clay(d.dir.path)) + A.dim("  " + d.profileId + (d.isDefault ? " · default" : "")
+                                                 + (d.env.map { " · CLAUDE_CONFIG_DIR=" + $0 } ?? "")))
+        print(A.bold("CLI account  ") + (d.account.map { a in
+            (a.email ?? "?") + (a.orgName.map { " · " + $0 } ?? "") + A.dim("  " + a.identity)
+        } ?? A.yellow("not signed in") + A.dim("  (" + d.accountFile.path + ")")))
+        // A symlinked settings.json (shared by the config dirs) shows where it points.
+        let hook = PromptHookInstaller.realFile(d.settings).path
+        print(A.bold("Prompt hook  ") + (PromptHookInstaller.isInstalled(settings: d.settings) ? A.green("installed") : A.dim("off"))
+              + A.dim("  " + d.settings.path + (hook != d.settings.standardizedFileURL.path ? " → " + hook : "")))
+        print(A.bold("Registry     ") + "\(registry.count) running session\(registry.count == 1 ? "" : "s") · "
+              + "\(registry.filter(\.isDesktop).count) desktop · \(live.count) terminal")
+        let chats = index.sessions(excluding: desktopIds, live: live, accountUuid: d.identity, profileId: d.profileId)
+        if chats.isEmpty { print(A.dim("No terminal chats in the last 7 days.")) }
+        for s in chats {
+            let state = s.openInTerminal == true ? A.green("open") : A.dim(Fmt.ago(s.lastActivityAt))
+            let lhs = "  " + A.clay("▸") + " " + A.trunc(s.title, max(10, w - 60)) + A.dim(" · " + A.trunc((s.cwd as NSString).lastPathComponent, 18))
+            print(A.pad(lhs, w - 48) + A.pad(state, 10) + A.dim(s.id))
+        }
     }
 
 case "queue":

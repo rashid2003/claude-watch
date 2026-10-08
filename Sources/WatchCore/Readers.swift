@@ -88,8 +88,9 @@ public final class SessionIndex {
 }
 
 public enum TaskReader {
-    public static func tasks(cliSessionId: String) -> [TaskItem] {
-        let dir = Paths.tasks.appendingPathComponent(cliSessionId)
+    /// `root` is the config dir's `tasks/` (terminal chats of another CLI config dir keep theirs there).
+    public static func tasks(cliSessionId: String, root: URL = Paths.tasks) -> [TaskItem] {
+        let dir = root.appendingPathComponent(cliSessionId)
         let files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
         return files.filter { $0.hasSuffix(".json") }.compactMap { f -> TaskItem? in
             guard let d = JSONFile.object(at: dir.appendingPathComponent(f)),

@@ -1,7 +1,8 @@
 import Foundation
 
 extension Profile {
-    /// The pseudo profile terminal chats belong to (never a desktop window; not in `Snapshot.profiles`).
+    /// The pseudo profile terminal chats of the default CLI config dir belong to (never a desktop
+    /// window; not in `Snapshot.profiles`). Other config dirs have their own: `CLIConfigDir.profile`.
     public static var terminal: Profile { Profile(id: terminalId, name: "Terminal", dataDir: Paths.claudeHome) }
 }
 
@@ -48,18 +49,124 @@ public struct CLIAccount: Equatable, Sendable {
     public var accountUuid: String
     public var orgUuid: String?
     public var email: String?
+    public var orgName: String?
     /// "account/org", the same key desktop chats are grouped by.
     public var identity: String { orgUuid.map { accountUuid + "/" + $0 } ?? accountUuid }
 
-    public init(accountUuid: String, orgUuid: String?, email: String?) {
-        self.accountUuid = accountUuid; self.orgUuid = orgUuid; self.email = email
+    public init(accountUuid: String, orgUuid: String?, email: String?, orgName: String? = nil) {
+        self.accountUuid = accountUuid; self.orgUuid = orgUuid; self.email = email; self.orgName = orgName
     }
 
     public static func read(from url: URL = Paths.claudeGlobalConfig) -> CLIAccount? {
         guard let d = JSONFile.object(at: url), let oa = d["oauthAccount"] as? [String: Any],
               let a = oa["accountUuid"] as? String, !a.isEmpty else { return nil }
         let org = (oa["organizationUuid"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        return CLIAccount(accountUuid: a, orgUuid: org, email: oa["emailAddress"] as? String)
+        return CLIAccount(accountUuid: a, orgUuid: org, email: oa["emailAddress"] as? String,
+                          orgName: (oa["organizationName"] as? String).flatMap { $0.isEmpty ? nil : $0 })
+    }
+}
+
+/// A `claude` CLI config dir (what `CLAUDE_CONFIG_DIR` points at), with its own login, transcripts
+/// (`projects/`), running-session registry (`sessions/`) and tasks. The default is `CLAUDE_CONFIG_DIR`
+/// or `~/.claude`; running the CLI as another account (`CLAUDE_CONFIG_DIR=~/.claude-1 claude`) adds more.
+/// Each one's terminal chats get their own terminal profile, filed under the account it's signed into.
+public struct CLIConfigDir: Equatable, Sendable {
+    public var dir: URL
+    public var isDefault: Bool
+    /// Where the CLI keeps this dir's login: `~/.claude.json` for `~/.claude`, else `<dir>/.claude.json`.
+    public var accountFile: URL
+    public var account: CLIAccount?
+    /// `CLAUDE_CONFIG_DIR` to run the CLI with for this dir; nil (unset) for `~/.claude`.
+    public var env: String?
+
+    public var projects: URL { dir.appendingPathComponent("projects") }
+    public var registry: URL { dir.appendingPathComponent("sessions") }
+    public var settings: URL { dir.appendingPathComponent("settings.json") }
+    public var tasks: URL { dir.appendingPathComponent("tasks") }
+    /// "claude-1" for `~/.claude-1`.
+    public var shortName: String { Self.shortName(dir) }
+    /// Stable: the default dir keeps the original terminal profile id, so nothing stored breaks.
+    public var profileId: String { isDefault ? Profile.terminalId : Profile.terminalId + ":" + shortName }
+    public var profile: Profile {
+        Profile(id: profileId, name: isDefault ? "Terminal" : "Terminal (\(shortName))", dataDir: dir)
+    }
+    /// The identity its chats are filed under: the signed-in account, else the profile on its own.
+    public var identity: String { account?.identity ?? profileId }
+
+    public init(dir: URL, isDefault: Bool, home: URL = Paths.home, account: CLIAccount? = nil) {
+        self.dir = dir
+        self.isDefault = isDefault
+        let standard = Self.isStandard(dir, home: home)
+        accountFile = standard ? home.appendingPathComponent(".claude.json") : dir.appendingPathComponent(".claude.json")
+        env = standard ? nil : dir.path
+        self.account = account
+    }
+
+    static func shortName(_ dir: URL) -> String {
+        let n = dir.lastPathComponent
+        return n.hasPrefix(".") ? String(n.dropFirst()) : n
+    }
+
+    static func isStandard(_ dir: URL, home: URL) -> Bool {
+        dir.standardizedFileURL.path == home.appendingPathComponent(".claude").standardizedFileURL.path
+    }
+
+    /// The default dir (always, signed in or not) plus `~/.claude` (when it isn't the default) and every
+    /// `~/.claude-*` dir that is signed in or has transcripts, each with the account it's signed into.
+    /// Other `~/.claude-*` dirs (another tool's data) are ignored.
+    public static func discover(home: URL = Paths.home,
+                                env: [String: String] = ProcessInfo.processInfo.environment) -> [CLIConfigDir] {
+        let fm = FileManager.default
+        let def = env["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? home.appendingPathComponent(".claude")
+        var out: [CLIConfigDir] = []
+        var seen = Set<String>()
+        func add(_ dir: URL, isDefault: Bool) {
+            guard seen.insert(dir.resolvingSymlinksInPath().standardizedFileURL.path).inserted else { return }
+            var d = CLIConfigDir(dir: dir, isDefault: isDefault, home: home)
+            d.account = CLIAccount.read(from: d.accountFile)
+            var isDir: ObjCBool = false
+            let hasProjects = fm.fileExists(atPath: d.projects.path, isDirectory: &isDir) && isDir.boolValue
+            if isDefault || d.account != nil || hasProjects { out.append(d) }
+        }
+        add(def, isDefault: true)
+        let others = ((try? fm.contentsOfDirectory(atPath: home.path)) ?? []).filter { $0.hasPrefix(".claude-") }.sorted()
+        for name in [".claude"] + others {
+            var isDir: ObjCBool = false
+            let url = home.appendingPathComponent(name)
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            add(url, isDefault: false)
+        }
+        return out
+    }
+
+    /// The terminal profile with this id, without reading any login; nil if it isn't a terminal id
+    /// or its dir is gone.
+    public static func profile(id: String, home: URL = Paths.home,
+                               env: [String: String] = ProcessInfo.processInfo.environment) -> Profile? {
+        guard Profile.isTerminalId(id) else { return nil }
+        if id == Profile.terminalId {
+            let def = env["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+                ?? home.appendingPathComponent(".claude")
+            return CLIConfigDir(dir: def, isDefault: true, home: home).profile
+        }
+        return discover(home: home, env: env).first { $0.profileId == id }?.profile
+    }
+
+    /// One terminal chat per session id: when two dirs hold the same transcript (a copied chat), the
+    /// newest transcript wins, then the earlier dir. `live` are each dir's running registry entries;
+    /// only the winning dir's entries are kept.
+    public static func merge(_ perDir: [(profileId: String, sessions: [SessionInfo], live: [RegistryEntry])])
+        -> (sessions: [SessionInfo], live: [RegistryEntry]) {
+        var best: [String: SessionInfo] = [:]
+        for d in perDir {
+            for s in d.sessions {
+                if let old = best[s.id], old.recordModifiedAt >= s.recordModifiedAt { continue }
+                best[s.id] = s
+            }
+        }
+        let live = perDir.flatMap { d in d.live.filter { best[$0.sessionId].map { $0.profileId == d.profileId } ?? true } }
+        return (best.values.sorted { $0.lastActivityAt > $1.lastActivityAt }, live)
     }
 }
 
@@ -73,7 +180,8 @@ struct TranscriptMeta: Equatable {
 }
 
 /// Finds Claude Code sessions that don't belong to a desktop chat: running ones from the session
-/// registry, plus recent transcripts in `~/.claude/projects` written by the `claude` CLI.
+/// registry, plus recent transcripts in `<config dir>/projects` written by the `claude` CLI.
+/// One index per CLI config dir.
 public final class TerminalSessionIndex {
     public static let window: TimeInterval = 7 * 86400
     private let registryDir: URL
@@ -92,6 +200,10 @@ public final class TerminalSessionIndex {
         self.isAlive = isAlive ?? Self.processAlive
     }
 
+    public convenience init(_ dir: CLIConfigDir, isAlive: ((RegistryEntry) -> Bool)? = nil) {
+        self.init(registryDir: dir.registry, projectsDir: dir.projects, isAlive: isAlive)
+    }
+
     /// Every parseable registry entry, live or not.
     public func registry() -> [RegistryEntry] {
         let fm = FileManager.default
@@ -107,8 +219,10 @@ public final class TerminalSessionIndex {
 
     /// Terminal chats: transcripts active within `window` (or with a running process) whose id isn't
     /// any desktop chat's CLI session, written by the CLI rather than the desktop app or a script.
-    /// `live` are the running non-desktop registry entries (see `liveEntries`).
+    /// `live` are the running non-desktop registry entries (see `liveEntries`); chats are filed under
+    /// `profileId` (the config dir's terminal profile) and `accountUuid`.
     public func sessions(excluding desktopIds: Set<String>, live: [RegistryEntry], accountUuid: String,
+                         profileId: String = Profile.terminalId,
                          now: Date = Date(), window: TimeInterval = TerminalSessionIndex.window) -> [SessionInfo] {
         let stale = now.timeIntervalSince(listedAt)
         if stale > 30 || (stale > 5 && live.contains { files[$0.sessionId] == nil }) {
@@ -131,18 +245,19 @@ public final class TerminalSessionIndex {
                 if e == "claude-desktop" { continue }
                 if e.hasPrefix("sdk"), entry?.isInteractive != true { continue }
             }
-            out.append(Self.info(id: id, meta: m, mtime: f.mtime, entry: entry, accountUuid: accountUuid))
+            out.append(Self.info(id: id, meta: m, mtime: f.mtime, entry: entry, accountUuid: accountUuid, profileId: profileId))
         }
         let paths = Set(files.values.map(\.url.path))
         meta = meta.filter { paths.contains($0.key) }
         return out.sorted { $0.lastActivityAt > $1.lastActivityAt }
     }
 
-    static func info(id: String, meta m: TranscriptMeta, mtime: Date, entry: RegistryEntry?, accountUuid: String) -> SessionInfo {
+    static func info(id: String, meta m: TranscriptMeta, mtime: Date, entry: RegistryEntry?, accountUuid: String,
+                     profileId: String = Profile.terminalId) -> SessionInfo {
         let cwd = m.cwd ?? entry?.cwd ?? ""
         let title = entry?.name ?? m.title ?? m.firstPrompt.map { Self.clip($0, 80) }
             ?? ((cwd as NSString).lastPathComponent.isEmpty ? "Terminal chat" : (cwd as NSString).lastPathComponent)
-        var info = SessionInfo(id: id, cliSessionId: id, priorCliSessionIds: [], profileId: Profile.terminalId,
+        var info = SessionInfo(id: id, cliSessionId: id, priorCliSessionIds: [], profileId: profileId,
                                accountUuid: accountUuid, title: title, cwd: cwd, model: nil, permissionMode: nil,
                                lastActivityAt: max(mtime, entry?.updatedAt ?? .distantPast), isArchived: false,
                                desktopError: nil, desktopErrorAt: nil, hasPendingPermission: false,

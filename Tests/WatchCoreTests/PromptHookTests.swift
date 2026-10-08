@@ -188,4 +188,42 @@ final class PromptHookTests: XCTestCase {
         XCTAssertNotNil(try? FileManager.default.destinationOfSymbolicLink(atPath: settings.path))
         XCTAssertTrue(PromptHookInstaller.isInstalled(settings: real))
     }
+
+    func testConfigDirsSharingOneSettingsFileGetOneEntry() throws {
+        // ~/.claude/settings.json is real; ~/.claude-1 and ~/.claude-3 link to it (one relative link).
+        let fm = FileManager.default
+        let main = dir.appendingPathComponent(".claude"), one = dir.appendingPathComponent(".claude-1"),
+            three = dir.appendingPathComponent(".claude-3")
+        for d in [main, one, three] { try fm.createDirectory(at: d, withIntermediateDirectories: true) }
+        let real = main.appendingPathComponent("settings.json")
+        try #"{"model": "opus"}"#.write(to: real, atomically: true, encoding: .utf8)
+        try fm.createSymbolicLink(at: one.appendingPathComponent("settings.json"), withDestinationURL: real)
+        try fm.createSymbolicLink(atPath: three.appendingPathComponent("settings.json").path,
+                                  withDestinationPath: "../.claude/settings.json")
+        let links = [main, one, three].map { $0.appendingPathComponent("settings.json") }
+
+        let files = PromptHookInstaller.files(links)
+        XCTAssertEqual(files.map(\.path), [PromptHookInstaller.realFile(real).path])
+        for f in files { try PromptHookInstaller.install(settings: f, command: cmd) }
+        for l in links { XCTAssertTrue(PromptHookInstaller.isInstalled(settings: l), l.path) }
+        for l in links.dropFirst() {
+            XCTAssertNotNil(try? fm.destinationOfSymbolicLink(atPath: l.path), "\(l.lastPathComponent) stays a link")
+        }
+        // Installing through a link edits the shared file in place: still one entry.
+        try PromptHookInstaller.install(settings: links[2], command: cmd)
+        let groups = try XCTUnwrap((try json(Data(contentsOf: real))["hooks"] as? [String: Any])?["PermissionRequest"] as? [Any])
+        XCTAssertEqual(groups.count, 1)
+        try PromptHookInstaller.remove(settings: links[1])
+        for l in links { XCTAssertFalse(PromptHookInstaller.isInstalled(settings: l)) }
+        XCTAssertNotNil(try? fm.destinationOfSymbolicLink(atPath: links[1].path))
+    }
+
+    func testLinkToAMissingFileIsCreatedNotReplaced() throws {
+        let fm = FileManager.default
+        let target = dir.appendingPathComponent("shared/settings.json")
+        try fm.createSymbolicLink(at: settings, withDestinationURL: target)
+        try PromptHookInstaller.install(settings: settings, command: cmd)
+        XCTAssertNotNil(try? fm.destinationOfSymbolicLink(atPath: settings.path), "the link wasn't replaced by a file")
+        XCTAssertTrue(PromptHookInstaller.isInstalled(settings: target))
+    }
 }
