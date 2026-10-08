@@ -117,11 +117,15 @@ struct ChatParser {
     var messages: [ChatMessage] = []
     /// Byte offset of the line each message came from.
     var lineStarts: [UInt64] = []
-    /// Offset of the line being consumed (set by the caller; only recorded in `lineStarts`).
+    /// Offset of the line being consumed (set by the caller; recorded in `lineStarts`, checked against `workFrom`).
     var lineAt: UInt64 = 0
     var work = WorkTracker()
     /// False skips live-work bookkeeping (older history only needs messages).
     var trackWork = true
+    /// Lines before this offset are already in `work` (seeded from the scanner's tracker): they aren't fed
+    /// to it again, as `WorkTracker` isn't idempotent (a replayed Agent call would show twice).
+    var workFrom: UInt64 = 0
+    private var feedsWork: Bool { trackWork && lineAt >= workFrom }
     private var toolIndex: [String: Int] = [:]   // tool_use id -> message index
     /// tool_use ids seen in these lines.
     private var uses = Set<String>()
@@ -134,7 +138,7 @@ struct ChatParser {
         let isUser = head.range(of: Data("\"type\":\"user\"".utf8)) != nil
         let isAssistant = head.range(of: Data("\"type\":\"assistant\"".utf8)) != nil
         if !isUser && !isAssistant && WorkTracker.isWorkAttachment(head) {
-            if trackWork, let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] { work.consume(obj) }
+            if feedsWork, let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] { work.consume(obj) }
             return []
         }
         guard isUser || isAssistant || line.count > 2048 else { return [] }
@@ -145,7 +149,7 @@ struct ChatParser {
         }
         guard let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
               let type = obj["type"] as? String, type == "user" || type == "assistant" else { return [] }
-        if trackWork { work.consume(obj) }
+        if feedsWork { work.consume(obj) }
         if obj["isSidechain"] as? Bool == true || obj["isMeta"] as? Bool == true { return [] }
         let uuid = obj["uuid"] as? String ?? UUID().uuidString
         let at = (obj["timestamp"] as? String).flatMap(TranscriptScanner.parseISO) ?? Date()
@@ -209,7 +213,7 @@ struct ChatParser {
     private mutating func rawToolResult(_ line: Data) -> [Int] {
         guard let id = TranscriptScanner.toolUseId(inRaw: line) else { return [] }
         let isError = line.fastRange(of: Data("\"is_error\":true".utf8)) != nil
-        if trackWork { work.result(id: id, isError: isError, at: TranscriptScanner.timestamp(inRaw: line) ?? Date()) }
+        if feedsWork { work.result(id: id, isError: isError, at: TranscriptScanner.timestamp(inRaw: line) ?? Date()) }
         return resolve(id, ok: !isError).map { [$0] } ?? []
     }
 

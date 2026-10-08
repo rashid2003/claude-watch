@@ -18,6 +18,13 @@ public struct TranscriptCursor: Equatable, Sendable {
     public var string: String { "o:\(offset):\(file)" }
 }
 
+/// A transcript's live work as read up to `offset` (a line start), e.g. by `TranscriptScanner`.
+public struct WorkSeed: Sendable {
+    public var tracker: WorkTracker
+    public var offset: UInt64
+    public init(tracker: WorkTracker, offset: UInt64) { self.tracker = tracker; self.offset = offset }
+}
+
 /// One transcript read from its end: the newest lines are parsed first, older ones only when a page
 /// reaches back to them, so opening a long chat costs about one window instead of the whole file.
 /// The messages are the same a parse from the start gives (`ChatParser.prepend` carries tool results
@@ -38,13 +45,20 @@ final class TranscriptHistory {
     private(set) var head: UInt64
     private let chunk: UInt64
 
-    init?(url: URL, liveWindow: UInt64 = TranscriptHistory.liveWindow, chunk: UInt64 = TranscriptHistory.chunk) {
+    /// `workSeed` is asked for the transcript's live work from a full read (the scanner's) when the window
+    /// doesn't reach the start of the file, so agents and shells started before it still show.
+    init?(url: URL, liveWindow: UInt64 = TranscriptHistory.liveWindow, chunk: UInt64 = TranscriptHistory.chunk,
+          workSeed: (() -> WorkSeed?)? = nil) {
         guard let (size, file) = Self.stat(url), let h = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? h.close() }
         let end = Self.lineEnd(h, size: size)
         let (start, parser) = autoreleasepool { () -> (UInt64, ChatParser) in
             let (start, data) = Self.readBack(h, end: end, atLeast: liveWindow)
-            return (start, Self.parse(data, at: start, trackWork: true))
+            // A seed read up to inside the window (or past it) covers everything before; one that stops short
+            // of the window would leave a gap, so the window alone is used then.
+            var seed: WorkSeed?
+            if start > 0, let s = workSeed?(), s.offset >= start, s.offset <= size { seed = s }
+            return (start, Self.parse(data, at: start, trackWork: true, seed: seed))
         }
         self.url = url
         self.file = file
@@ -145,9 +159,14 @@ final class TranscriptHistory {
     }
 
     /// Parses whole lines that start at byte `start`.
-    static func parse(_ data: Data, at start: UInt64, trackWork: Bool) -> ChatParser {
+    /// With a `seed`, live work starts from its tracker and only lines from its offset on are fed to it.
+    static func parse(_ data: Data, at start: UInt64, trackWork: Bool, seed: WorkSeed? = nil) -> ChatParser {
         var p = ChatParser()
         p.trackWork = trackWork
+        if let seed {
+            p.work = seed.tracker
+            p.workFrom = seed.offset
+        }
         data.forEachLine { line, at in
             p.lineAt = start + UInt64(at)
             _ = p.consume(line)
@@ -175,13 +194,16 @@ public final class TranscriptCache: @unchecked Sendable {
     private let capacity: Int
     private let liveWindow: UInt64
     private let chunk: UInt64
+    private let workSeed: ((URL) -> WorkSeed?)?
 
-    public convenience init(capacity: Int = 16) {
-        self.init(capacity: capacity, liveWindow: TranscriptHistory.liveWindow, chunk: TranscriptHistory.chunk)
+    /// `workSeed` gives a transcript's live work from a full read (the scanner's), for chats opened from
+    /// their end. It's called with the cache locked, so it must not call back into the cache.
+    public convenience init(capacity: Int = 16, workSeed: ((URL) -> WorkSeed?)? = nil) {
+        self.init(capacity: capacity, liveWindow: TranscriptHistory.liveWindow, chunk: TranscriptHistory.chunk, workSeed: workSeed)
     }
 
-    init(capacity: Int, liveWindow: UInt64, chunk: UInt64) {
-        self.capacity = capacity; self.liveWindow = liveWindow; self.chunk = chunk
+    init(capacity: Int, liveWindow: UInt64, chunk: UInt64, workSeed: ((URL) -> WorkSeed?)? = nil) {
+        self.capacity = capacity; self.liveWindow = liveWindow; self.chunk = chunk; self.workSeed = workSeed
     }
 
     /// The newest `limit` messages (whole lines) with the cursor for older pages, and a feed that
@@ -230,7 +252,8 @@ public final class TranscriptCache: @unchecked Sendable {
             entries[url]?.used = Date()
             return e.history
         }
-        guard let h = TranscriptHistory(url: url, liveWindow: liveWindow, chunk: chunk) else {
+        let seed = workSeed.map { f in { f(url) } }
+        guard let h = TranscriptHistory(url: url, liveWindow: liveWindow, chunk: chunk, workSeed: seed) else {
             entries[url] = nil
             return nil
         }
