@@ -1,7 +1,7 @@
 name = "session-watch-relay"
 main = "src/index.ts"
 compatibility_date = "2025-09-01"
-workers_dev = true
+workers_dev = false
 routes = [{ pattern = "relay.sessionwatch.lajward.co", custom_domain = true }]
 
 [observability]
