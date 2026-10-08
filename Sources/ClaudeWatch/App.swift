@@ -7,13 +7,14 @@ import WatchCore
 
 /// Sections of the main window's sidebar.
 enum MainSection: String, CaseIterable, Identifiable, Hashable {
-    case overview, chats, iphone, settings
+    case overview, chats, system, iphone, settings
     var id: String { rawValue }
     var title: String { self == .iphone ? "iphone" : rawValue }
     var symbol: String {
         switch self {
         case .overview: "gauge.with.dots.needle.33percent"
         case .chats: "bubble.left.and.bubble.right"
+        case .system: "memorychip"
         case .iphone: "iphone"
         case .settings: "gearshape"
         }
@@ -34,7 +35,10 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
         didSet { if config.showInDock != oldValue.showInDock { applyActivationPolicy() } }
     }
     @Published var configError: String?
+    /// The Mac's resources (memory, swap, CPU, disk) and their 30-minute trend.
+    @Published var health: SystemHealth?
     let monitor = Monitor(ownEngine: true)
+    let system: SystemWatch
     private(set) var bridge: BridgeController?
     /// Bridge settings this process started with (changing them needs a restart).
     let bridgeAtLaunch: (enabled: Bool, port: Int)
@@ -44,6 +48,8 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
 
     override init() {
         bridgeAtLaunch = (monitor.config.bridgeEnabled, monitor.config.bridgePort)
+        system = SystemWatch(config: { [monitor] in monitor.config.system },
+                             profiles: { [monitor] in ProfileDiscovery.discover(config: monitor.config) })
         super.init()
         config = monitor.config
         let center = UNUserNotificationCenter.current()
@@ -72,6 +78,18 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
         }
         monitor.onEvent = { [weak self] e in self?.notify(e); self?.bridge?.event(e) }
         monitor.start()
+        bridge?.systemWatch = system
+        system.onSample = { [weak self] h in
+            self?.bridge?.systemSample(h)
+            DispatchQueue.main.async { self?.health = h }
+        }
+        system.onAlert = { [weak self] level, h in
+            self?.post(title: SystemText.title(level, reasons: h.reasons), body: SystemText.body(reasons: h.reasons, apps: h.apps))
+            self?.bridge?.systemAlert(level, h)
+        }
+        // Quitting can take 30 s; keep it off the sampling queue.
+        system.onAutoAct = { [weak self] h in DispatchQueue.global(qos: .userInitiated).async { self?.autoAct(h) } }
+        system.start()
         // Ask for Accessibility + Automation now, while someone is at the keyboard.
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {
             let pid = ClaudeProcesses.list().first?.pid
@@ -114,6 +132,47 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
         }
         c.sound = .default
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
+    }
+
+    private func post(title: String, body: String) {
+        let c = UNMutableNotificationContent()
+        c.title = title
+        c.body = body
+        c.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
+    }
+
+    // MARK: System health
+
+    /// Runs a system action off the main thread; `done` gets (ok, message) on main.
+    func runSystem(_ a: SystemAction, done: @escaping (Bool, String) -> Void) {
+        let snap = snapshot, apps = health?.apps ?? []
+        DispatchQueue.global(qos: .userInitiated).async { [system] in
+            let r = SystemActions.run(a, snapshot: snap, apps: apps)
+            if case .clean = a { system.refreshCleanable() }
+            DispatchQueue.main.async { done(r.ok, r.message) }
+        }
+    }
+
+    /// The Mac stayed critical: carry out the auto-act settings once, then say what was done.
+    private func autoAct(_ h: SystemHealth) {
+        let cfg = monitor.config.system.auto
+        let snap = DispatchQueue.main.sync { snapshot }
+        var done: [String] = []
+        if cfg.closeIdleClaude { done.append(SystemActions.run(.closeIdleClaude, snapshot: snap, apps: h.apps).message) }
+        for id in cfg.quitApps {
+            let r = SystemActions.run(.quitApp(id), snapshot: snap, apps: h.apps, force: cfg.forceIfStuck)
+            if !r.message.hasSuffix("isn't running") { done.append(r.message) }
+        }
+        if !cfg.cleanTargets.isEmpty, h.reasons.contains(where: { $0.hasPrefix("disk ") }) {
+            done.append(SystemActions.run(.clean(cfg.cleanTargets), snapshot: snap, apps: h.apps).message)
+            system.refreshCleanable()
+        }
+        guard !done.isEmpty else { return }
+        let body = done.joined(separator: " · ")
+        bridge?.server.audit.append(device: "auto", command: "auto-act", target: nil, result: "done", reason: body)
+        post(title: "Session Watch acted: Mac was critical", body: body)
+        bridge?.pushSystem(title: "Session Watch acted: Mac was critical", body: body)
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent n: UNNotification,
