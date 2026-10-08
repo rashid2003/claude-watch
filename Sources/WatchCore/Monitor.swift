@@ -265,12 +265,13 @@ public final class Monitor {
         let terminal = terminalIndex.sessions(excluding: desktopIds, live: terminalLive,
                                               accountUuid: cliAccount?.identity ?? Profile.terminalId, now: now)
         let terminalIds = Set(terminal.map(\.id))
-        var terminalBusy = Set<String>()
+        var terminalBusy = Set<String>(), terminalIdle = Set<String>()
         for e in terminalLive where terminalIds.contains(e.sessionId) {
             // Interactive processes win over a background `-p` run of the same chat.
             if liveRunners[e.sessionId] == nil || e.isInteractive { liveRunners[e.sessionId] = e.pid }
             live.insert(e.sessionId)
             if e.status == "busy" { terminalBusy.insert(e.sessionId) }
+            if e.status == "idle", e.isInteractive { terminalIdle.insert(e.sessionId) }
         }
         if !terminal.isEmpty { profileAccount[Profile.terminalId] = cliAccount?.identity ?? Profile.terminalId }
 
@@ -343,8 +344,9 @@ public final class Monitor {
                 var activity = Self.activity(session: s, tail: tail,
                                              transcriptMtime: s.cliSessionId.flatMap(scanner.transcriptURL).flatMap(Self.mtime),
                                              now: now)
-                if activity == .idle, live.contains(s.id), let at = tail.lastAt, now.timeIntervalSince(at) < 1800,
-                   tail.last != .assistantDone { activity = .working }
+                // (Not when a terminal's registry says it's idle, e.g. a turn interrupted with Esc.)
+                if activity == .idle, live.contains(s.id), !terminalIdle.contains(s.id), let at = tail.lastAt,
+                   now.timeIntervalSince(at) < 1800, tail.last != .assistantDone { activity = .working }
                 // The terminal registry says the turn is running (it can be quiet for a while).
                 if activity == .idle, terminalBusy.contains(s.id), tail.last != .rateLimited { activity = .working }
                 // A running tool call with no result, a quiet transcript and no process for it: waiting on you.
