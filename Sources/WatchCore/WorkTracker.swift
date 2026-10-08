@@ -224,9 +224,10 @@ public struct WorkTracker: Codable, Sendable {
 
     // MARK: Text
 
-    /// "Bash: swift test" for commands, the transcript one-liner ("Read App.swift") otherwise.
+    /// "Bash: swift test" / "Monitor: …" for commands, the transcript one-liner ("Read App.swift") otherwise.
     static func label(tool: String, input: [String: Any]) -> String {
         if tool == "Bash", let c = input["command"] as? String, !c.isEmpty { return "Bash: " + clip(c) }
+        if tool == "Monitor" { return "Monitor: " + clip(input["description"] as? String ?? input["command"] as? String ?? "") }
         return ChatFeed.oneLiner(tool: tool, input: input)
     }
 

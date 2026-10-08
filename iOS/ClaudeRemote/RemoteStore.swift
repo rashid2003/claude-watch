@@ -37,6 +37,8 @@ final class RemoteStore {
     private(set) var messagesLoaded = false
     /// The transcript on screen came from the disk cache and the Mac's copy hasn't arrived yet.
     private(set) var messagesStale = false
+    /// What the open chat is doing (running tools, subagents, background tasks), from the Mac's `.work`.
+    private(set) var work: LiveWork?
     @ObservationIgnored private var cacheSave: Task<Void, Never>?
     @ObservationIgnored private var prefetching = false
 
@@ -76,8 +78,9 @@ final class RemoteStore {
 
     /// For previews: a store that never touches the network, Keychain or disk.
     init(preview snapshot: Snapshot?, connection: Connection = .connected, messages: [ChatMessage] = [],
-         paired: Bool = false) {
+         paired: Bool = false, work: LiveWork? = nil) {
         self.snapshot = snapshot
+        self.work = work
         self.lastUpdated = snapshot?.at
         self.connection = connection
         self.messages = messages
@@ -113,6 +116,7 @@ final class RemoteStore {
         connection = .connected
         messages = Fixtures.messages
         messagesLoaded = true
+        work = Fixtures.work
         system = Fixtures.system
         snapshot?.systemLevel = Fixtures.system.level
         olderCursor = nil
@@ -337,6 +341,9 @@ final class RemoteStore {
             }
             messagesLoaded = true
             saveOpenChat(after: reset ? 0 : 2)
+        case .work(let chatId, let w):
+            guard chatId == openChatId else { return }
+            work = w
         case .job(let j):
             record(j)
         case .system(let h):
@@ -377,6 +384,7 @@ final class RemoteStore {
         guard openChatId != id else { return }
         openChatId = id
         if isPreview { return }
+        work = nil
         cacheSave?.cancel()
         if let cached = MessageCache.load(id) {
             messages = cached.messages
