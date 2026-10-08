@@ -188,6 +188,38 @@ final class ServerTests: XCTestCase {
         XCTAssertEqual(after, 401)
     }
 
+    func testDevicesRememberTheAppVersionTheySendAndOldOnesKeepWorking() async throws {
+        let token = try await pair()
+        XCTAssertNil(server.devices.all.first?.client, "a phone that sends no version")
+        let (old, _) = try await request("GET", "/v1/snapshot", token: token)
+        XCTAssertEqual(old, 200)
+
+        let info = ClientInfo(appVersion: "1.3", build: "202610090100")
+        var r = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/status")!)
+        r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        for (k, v) in info.headers { r.setValue(v, forHTTPHeaderField: k) }
+        let (data, resp) = try await URLSession.shared.data(for: r)
+        XCTAssertEqual((resp as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertEqual(try WireCoder.decoder.decode(BridgeStatus.self, from: data).protocolVersion, WireProtocol.current)
+        XCTAssertEqual(server.devices.all.first?.client, info)
+        // Kept on disk, and not wiped by a later request without headers (the widget's own fetch).
+        _ = try await request("GET", "/v1/snapshot", token: token)
+        XCTAssertEqual(DeviceStore(url: devicesURL).all.first?.client, info)
+    }
+
+    func testPairingRecordsTheAppVersion() async throws {
+        let code = server.pairing.open()
+        var r = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        r.httpMethod = "POST"
+        r.httpBody = try WireCoder.encoder.encode(PairRequest(code: code, deviceName: "New iPhone"))
+        let info = ClientInfo(appVersion: "2.0", build: "1", protocolVersion: 1)
+        for (k, v) in info.headers { r.setValue(v, forHTTPHeaderField: k) }
+        let (_, resp) = try await URLSession.shared.data(for: r)
+        XCTAssertEqual((resp as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertEqual(server.devices.all.first?.client, info)
+        XCTAssertEqual(server.devices.all.first?.client?.hint(), .updatePhone)
+    }
+
     func testDeviceRegistration() async throws {
         let token = try await pair()
         let (s, data) = try await request("POST", "/v1/devices", token: token,

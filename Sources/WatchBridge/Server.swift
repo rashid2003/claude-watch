@@ -373,6 +373,7 @@ public final class BridgeServer: @unchecked Sendable {
         if req.method == "POST", p == ["pair"] { return conn.respond(pair(req)) }
         guard let device = devices.authenticate(req.bearer) else { return conn.respond(.error(401, "Not paired")) }
         devices.touch(device.id)
+        if let info = ClientInfo(headers: req.headers), devices.noteClient(device.id, info) { onDevicesChanged?() }
         conn.device = device
 
         if req.method == "GET", p == ["v1", "stream"] { return upgrade(req, conn) }
@@ -398,6 +399,7 @@ public final class BridgeServer: @unchecked Sendable {
         guard let body = req.decode(PairRequest.self) else { return .error(400, "Bad pairing request") }
         guard pairing.redeem(body.code) else { return .error(403, "That code is wrong or expired. Open Pair iPhone… on the Mac again.") }
         let (d, token) = devices.add(name: body.deviceName)
+        if let info = ClientInfo(headers: req.headers) { devices.noteClient(d.id, info) }
         audit.append(device: d.name, command: "pair", target: d.id, result: "done")
         onDevicesChanged?()
         return .json(PairResponse(token: token, deviceId: d.id, macName: macName))

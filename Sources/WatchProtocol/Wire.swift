@@ -238,10 +238,19 @@ public struct BridgeStatus: Codable, Sendable {
     public var notify: [String: Bool]
     /// The relay room and key, so a phone paired before the relay (QR v1) can pick them up.
     public var relay: RelayInfo?
+    /// The Mac's `WireProtocol.current`. Nil from Macs before versions were sent (protocol 1).
+    public var protocolVersion: Int?
     public init(macName: String, version: String, warnings: [String], pushConfigured: Bool,
-                deviceId: String? = nil, notify: [String: Bool] = [:], relay: RelayInfo? = nil) {
+                deviceId: String? = nil, notify: [String: Bool] = [:], relay: RelayInfo? = nil,
+                protocolVersion: Int? = WireProtocol.current) {
         self.macName = macName; self.version = version; self.warnings = warnings
         self.pushConfigured = pushConfigured; self.deviceId = deviceId; self.notify = notify; self.relay = relay
+        self.protocolVersion = protocolVersion
+    }
+
+    /// Which side should be updated, from this phone's point of view (`phoneProtocol` is its own number).
+    public func hint(phoneProtocol: Int = WireProtocol.current) -> WireProtocol.Hint? {
+        WireProtocol.hint(phone: phoneProtocol, mac: protocolVersion)
     }
 }
 

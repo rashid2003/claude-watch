@@ -19,6 +19,8 @@ public struct Device: Codable, Hashable, Sendable, Identifiable {
     public var activityToken: String?
     public var activityStartToken: String?
     public var activityStartedAt: Date?
+    /// The iPhone app's version, build and protocol, as of the last request that carried them (older apps send none).
+    public var client: ClientInfo?
 
     public func wants(_ e: NotifyEvent) -> Bool { notify[e.rawValue] ?? true }
 }
@@ -79,6 +81,18 @@ public final class DeviceStore: @unchecked Sendable {
             }
         }
         if needSave { save() }
+    }
+
+    /// Records the app build a device last spoke with. True when it changed (and was saved).
+    @discardableResult
+    public func noteClient(_ id: String, _ info: ClientInfo) -> Bool {
+        let changed: Bool = lock.withLock {
+            guard let i = devices.firstIndex(where: { $0.id == id }), devices[i].client != info else { return false }
+            devices[i].client = info
+            return true
+        }
+        if changed { save() }
+        return changed
     }
 
     public func remove(id: String) {
