@@ -36,7 +36,7 @@ Mac 0.4.0 is installed. iPhone build from this branch is uploading to TestFlight
 |---|---|---|---|
 | 📋 | **Allow / Deny in the notification** | `feat/actionable-prompts` | Mac sends prompt pushes with a category; iPhone registers Allow / Always / Deny actions and answers from the notification (background task, no app launch) |
 | 📋 | **Open at login** | `feat/launch-at-login` | Mac Settings toggle using `SMAppService.mainApp`, on by default after first run, reflects System Settings changes |
-| 📋 | **Drafts follow you between devices** | `feat/draft-sync` | Unsent text in the phone composer shows on the Mac and the other way round. The Mac reads/writes the Claude desktop composer via Accessibility, never overwriting text the user is typing |
+| 🚧 | **Drafts follow you between devices** | `feat/draft-sync` | Built, needs a device check. Phone posts its draft (`POST /v1/chats/{id}/draft`, 1 s debounce) and keeps it per chat; Mac `DraftBook` (`drafts.json`) shows it under the chat in Session Watch (right-click → copy). While a phone has a chat open, the Mac reads that chat's desktop composer via Accessibility every 2 s (read-only) and sends it in `Snapshot.drafts`; an empty or untouched phone composer is filled with it ("from Mac · 2m ago"). Phone drafts are not typed into the Claude window (see Decisions) |
 | 📋 | **Live Activity shows when the Mac is unreachable** | `feat/live-activity-offline` | Mac sets `staleDate` and sends heartbeats. Widget renders a "disconnected" state when stale; the phone marks it locally when it loses the Mac |
 | 📋 | **See what a chat is doing, like the Claude app** | `feat/live-work` | Running commands (with elapsed time), subagents and their current step, and background tasks, shown in the chat and the chats list |
 
@@ -50,4 +50,5 @@ Mac 0.4.0 is installed. iPhone build from this branch is uploading to TestFlight
 
 - **Relay first.** On rashid's network Tailscale can't reach its control plane. The relay works anywhere, adding about 0.2–0.7 s per new stream.
 - **Queued replies go out together as one message**, like the desktop app's queue, rather than one turn each.
+- **Phone drafts stay in Session Watch on the Mac, not in the Claude composer.** Writing there means posting keystrokes to a background Electron window (it needs focus, so it would steal it) or setting the editor's value through Accessibility (its own state doesn't follow, so the text can vanish or be sent wrong). Keeping it in step as the phone draft changes would also mean replacing desktop text. Reading the desktop composer is safe and is done.
 - **The cache is only for speed.** The Mac's copy always replaces what the phone cached once it arrives.
