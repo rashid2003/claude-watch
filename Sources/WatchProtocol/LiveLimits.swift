@@ -36,13 +36,25 @@ public struct LiveLimits: Codable, Hashable, Sendable {
     public var hidden: Int               // accounts left out to stay under the cap
     public var prompts: Int
     public var working: Int
+    /// When the Mac took the snapshot (unix seconds): "last seen" once the activity goes stale.
     public var updated: Double
+    /// False when the iPhone app itself lost the Mac. The Mac never sends it, so any push from it clears this.
+    /// Optional so content from older Macs and apps still decodes.
+    public var connected: Bool?
 
-    public init(accounts: [Account], hidden: Int = 0, prompts: Int = 0, working: Int = 0, updated: Double) {
+    /// How long a Live Activity counts as current without a fresh update (the Mac sends heartbeats well inside this).
+    public static let staleAfter: TimeInterval = 12 * 60
+
+    public init(accounts: [Account], hidden: Int = 0, prompts: Int = 0, working: Int = 0, updated: Double,
+                connected: Bool? = nil) {
         self.accounts = accounts; self.hidden = hidden; self.prompts = prompts; self.working = working; self.updated = updated
+        self.connected = connected
     }
 
     public var updatedDate: Date { Date(timeIntervalSince1970: updated) }
+
+    /// The phone marked this as cut off from the Mac.
+    public var disconnected: Bool { connected == false }
 
     /// The account to feature where there's room for one: limited first (soonest back), then the busiest.
     public var headline: Account? {
