@@ -16,7 +16,8 @@ struct NewChatView: View {
 
     private enum Field { case folder, prompt }
 
-    private var accounts: [AccountStatus] { store.snapshot?.accounts ?? [] }
+    /// Accounts with a desktop window (terminal chats are started in a terminal).
+    private var accounts: [AccountStatus] { (store.snapshot?.accounts ?? []).filter { !$0.profile.isTerminal } }
     private var starting: Bool { store.isPending(Keys.newChat) }
     private var canStart: Bool {
         store.canSend && !starting && !profileId.isEmpty
