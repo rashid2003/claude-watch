@@ -11,9 +11,12 @@ public struct ProcSample: Sendable {
     public var footprint: Int64
     /// User + system CPU time so far, nanoseconds.
     public var cpuNanos: UInt64
+    /// The process macOS holds responsible (e.g. Docker for its Virtualization.framework VM); itself when unknown.
+    public var responsible: Int32
 
-    public init(pid: Int32, ppid: Int32, name: String, path: String, footprint: Int64, cpuNanos: UInt64) {
+    public init(pid: Int32, ppid: Int32, name: String, path: String, footprint: Int64, cpuNanos: UInt64, responsible: Int32? = nil) {
         self.pid = pid; self.ppid = ppid; self.name = name; self.path = path; self.footprint = footprint; self.cpuNanos = cpuNanos
+        self.responsible = responsible ?? pid
     }
 }
 
@@ -52,8 +55,16 @@ public final class ProcessScan {
         // On Apple Silicon these are Mach ticks, not nanoseconds.
         let ticks = info.ri_user_time + info.ri_system_time
         let nanos = ticks * UInt64(timebase.numer) / UInt64(max(1, timebase.denom))
-        return ProcSample(pid: pid, ppid: ppid, name: name, path: path, footprint: Int64(info.ri_phys_footprint), cpuNanos: nanos)
+        return ProcSample(pid: pid, ppid: ppid, name: name, path: path, footprint: Int64(info.ri_phys_footprint), cpuNanos: nanos,
+                          responsible: responsibleFn.map { $0(pid) }.flatMap { $0 > 0 ? $0 : nil })
     }
+
+    /// Private libquarantine call Activity Monitor uses to attribute XPC services to their app.
+    private typealias ResponsibleFn = @convention(c) (pid_t) -> pid_t
+    private static let responsibleFn: ResponsibleFn? = {
+        dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_get_pid_responsible_for_pid")   // RTLD_DEFAULT
+            .map { unsafeBitCast($0, to: ResponsibleFn.self) }
+    }()
 
     static func pidPath(_ pid: Int32) -> String {
         var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
@@ -92,9 +103,11 @@ public enum AppGrouper {
 
         var groups: [String: [(ProcSample, cpu: Double)]] = [:]
         for e in procs {
+            // A process outside any app counts toward the app macOS holds responsible for it, if that's an app.
+            let owner = bundle(of: e.0.path) == nil && e.0.responsible != e.0.pid ? byPid[e.0.responsible]?.0 ?? e.0 : e.0
             let key: String
-            if let root = claudeRoot(e.0) { key = "claude:\(root)" }
-            else if let b = bundle(of: e.0.path) { key = b }
+            if let root = claudeRoot(e.0) ?? claudeRoot(owner) { key = "claude:\(root)" }
+            else if let b = bundle(of: e.0.path) ?? bundle(of: owner.path) { key = b }
             else { key = "pid:\(e.0.pid)" }
             groups[key, default: []].append(e)
         }
@@ -113,7 +126,9 @@ public enum AppGrouper {
                 main = sorted[0].0.pid
                 canQuit = false
             } else {
-                name = appName(key) ?? ((key as NSString).lastPathComponent as NSString).deletingPathExtension
+                // Claude Code sessions run from a bare "claude.app" inside the desktop app's data folder.
+                name = appName(key) ?? (key.contains("/claude-code/") ? "Claude Code"
+                    : ((key as NSString).lastPathComponent as NSString).deletingPathExtension)
                 let running = appPid(key)
                 main = running ?? members.map(\.0.pid).min()!
                 canQuit = running != nil

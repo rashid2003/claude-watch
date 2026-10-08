@@ -59,4 +59,15 @@ final class ProcessScanTests: XCTestCase {
         XCTAssertFalse(KillGuard.allowsLive(pid: getpid()).ok)
         XCTAssertFalse(KillGuard.allowsLive(pid: 1).ok)
     }
+
+    func testXPCServicesCountTowardTheirResponsibleApp() {
+        let vm = "/System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine"
+        let docker = (ProcSample(pid: 50, ppid: 1, name: "com.docker.backend", path: "/Applications/Docker.app/Contents/MacOS/com.docker.backend",
+                                 footprint: 100 << 20, cpuNanos: 0), cpu: 0.0)
+        let machine = (ProcSample(pid: 60, ppid: 1, name: "com.apple.Virtualization.VirtualMachine", path: vm,
+                                  footprint: 8000 << 20, cpuNanos: 0, responsible: 50), cpu: 0.0)
+        let rows = AppGrouper.group([docker, machine], appPid: { _ in 50 }, appName: { _ in "Docker" }, claudeNames: [:], guardFn: { _ in true })
+        XCTAssertEqual(rows.map(\.name), ["Docker"])
+        XCTAssertEqual(rows.first?.rss, 8100 << 20)
+    }
 }
