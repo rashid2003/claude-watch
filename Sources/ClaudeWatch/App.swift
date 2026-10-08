@@ -778,6 +778,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         DevSnapshot.install()
         #endif
+        LoginItem.registerOnFirstLaunch()
         // SwiftUI opens the main window as the first scene; make sure it's in front, also as an accessory app.
         DispatchQueue.main.async { self.model.showMain() }
     }
