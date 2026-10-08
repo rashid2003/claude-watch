@@ -227,6 +227,7 @@ final class RemoteStore {
         Keychain.delete()
         SnapshotCache.clear()
         MessageCache.clear()
+        LocalDrafts.clear()
         UserDefaults.standard.removeObject(forKey: Self.registeredTokenKey)
         live.paired(nil)
         credentials = nil
@@ -461,6 +462,14 @@ final class RemoteStore {
 
     private func rebuildIndex() {
         messageIndex = Dictionary(messages.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { _, b in b })
+    }
+
+    // MARK: Drafts
+
+    /// Tells the Mac what's in a chat's composer, so it shows there. Best effort: false when it didn't arrive.
+    func postDraft(chatId: String, text: String) async -> Bool {
+        guard !isPreview, !isDemo, let client, canSend else { return false }
+        return (try? await client.setDraft(chatId: chatId, text: text)) != nil
     }
 
     // MARK: Commands
