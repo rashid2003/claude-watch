@@ -63,6 +63,12 @@ public enum BridgeCommand: Sendable {
 /// A live feed of one chat's messages (ChatFeed on the Mac).
 public protocol MessageSource: AnyObject {
     func poll() -> [ChatMessage]
+    /// What the chat is doing as of the last poll; nil if the source doesn't follow it.
+    var liveWork: LiveWork? { get }
+}
+
+public extension MessageSource {
+    var liveWork: LiveWork? { nil }
 }
 
 /// What the bridge needs from the app. Called on the bridge's queue; implementations must be thread-safe
@@ -234,7 +240,16 @@ public final class BridgeServer: @unchecked Sendable {
                 WSServerMessage.messages(chatId: chatId, messages: new, reset: false, before: nil)) {
                 c.sendText(data)
             }
+            sendWork(c, chatId, feed)
         }
+    }
+
+    /// The chat's live work, when it changed since the last one sent on this connection.
+    private func sendWork(_ c: Conn, _ chatId: String, _ feed: MessageSource) {
+        guard let w = feed.liveWork, w != c.sentWork,
+              let data = try? WireCoder.encoder.encode(WSServerMessage.work(chatId: chatId, work: w)) else { return }
+        c.sentWork = w
+        c.sendText(data)
     }
 
     private func pingAll() {
@@ -249,6 +264,7 @@ public final class BridgeServer: @unchecked Sendable {
         var isSocket = false
         var device: Device?
         var feed: (String, MessageSource)?
+        var sentWork: LiveWork?
         var watchingSystem = false
         weak var server: BridgeServer?
 
@@ -331,18 +347,20 @@ public final class BridgeServer: @unchecked Sendable {
             case .ping:
                 if let id = conn.device?.id { devices.touch(id) }   // tells the Live Activity driver the app is open
                 if let d = try? WireCoder.encoder.encode(WSServerMessage.pong) { conn.sendText(d) }
-            case .unsubscribe: conn.feed = nil
+            case .unsubscribe: conn.feed = nil; conn.sentWork = nil
             case .unwatchSystem: conn.watchingSystem = false
             case .watchSystem:
                 conn.watchingSystem = true
                 if let h = handler?.systemHealth(), let d = try? WireCoder.encoder.encode(WSServerMessage.system(h)) { conn.sendText(d) }
             case .subscribe:
+                conn.sentWork = nil
                 guard let id = m.chatId, let sub = handler?.subscribe(chatId: id) else { conn.feed = nil; return }
                 conn.feed = (id, sub.source)
                 let start = max(0, sub.initial.count - Self.initialBatch)
                 let msg = WSServerMessage.messages(chatId: id, messages: Array(sub.initial[start...]), reset: true,
                                                    before: start > 0 ? start : nil)
                 if let d = try? WireCoder.encoder.encode(msg) { conn.sendText(d) }
+                sendWork(conn, id, sub.source)
             }
         default: break
         }

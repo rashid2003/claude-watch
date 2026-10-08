@@ -5,7 +5,9 @@ import IOKit.pwr_mgt
 import WatchBridge
 import WatchCore
 
-extension ChatFeed: MessageSource {}
+extension ChatFeed: MessageSource {
+    public var liveWork: LiveWork? { work }
+}
 
 /// Connects the iPhone bridge to the Monitor: answers its reads, runs its commands, and turns
 /// events into push notifications.

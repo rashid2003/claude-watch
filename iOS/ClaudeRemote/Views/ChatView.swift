@@ -180,8 +180,20 @@ struct ChatView: View {
                 taskList(tasks)
                 Divider()
             }
+            if let w = liveWork {
+                LiveWorkPanel(work: w)
+                Divider()
+            }
         }
         .background(Theme.background)
+    }
+
+    /// The open chat's live work from the Mac (the snapshot's brief copy until it arrives), while the chat
+    /// works or the snapshot says something still runs. Finished items only show while it's working.
+    private var liveWork: LiveWork? {
+        let working = session?.isWorking == true
+        guard working || session?.work != nil, let w = store.work ?? session?.work else { return nil }
+        return w.isActive || (working && !w.isEmpty) ? w : nil
     }
 
     private func taskList(_ tasks: [TaskItem]) -> some View {

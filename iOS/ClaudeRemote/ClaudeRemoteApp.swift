@@ -41,8 +41,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         case "reconnecting": RemoteStore(preview: Fixtures.snapshot, connection: .reconnecting, messages: Fixtures.messages)
         case "waiting": RemoteStore(preview: nil, connection: .connecting, paired: true)
         case "empty": RemoteStore(preview: Fixtures.emptySnapshot)
-        case "busy": RemoteStore(preview: Fixtures.busySnapshot, messages: Fixtures.messages)
-        default: RemoteStore(preview: Fixtures.snapshot, messages: Fixtures.messages)
+        case "busy": RemoteStore(preview: Fixtures.busySnapshot, messages: Fixtures.messages, work: Fixtures.work)
+        default: RemoteStore(preview: Fixtures.snapshot, messages: Fixtures.messages, work: Fixtures.work)
         }
         switch demo("demoToast") {
         case "ok": store.toast = Toast(message: "allowed · Bash", isError: false)

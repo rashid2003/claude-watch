@@ -33,7 +33,7 @@ Last updated: 2026-10-08.
 | 🧪 | **Live Activity shows "Mac offline"** | `feat/live-activity-offline` | 12-min `stale-date` and 5-min heartbeats (priority 5). The phone marks it offline after 30 s without the Mac in the foreground |
 | 🧪 | Session Watch Next | `next` | Side-by-side build: shares the engine lock, skips keychain reads and the login item |
 | 🧪 | Revokes are logged | `next` | `remote-log.jsonl` gets `revoke … by mac/phone`. A device list emptied at 06:37 today had no trace |
-| 🚧 | **See what a chat is doing, like the Claude app** | `feat/live-work` | Running commands with elapsed time, subagents with their current step, background shells, in the chat and the list |
+| 🧪 | **See what a chat is doing, like the Claude app** | `feat/live-work` | `WorkTracker` follows running tool calls, subagents (their own `subagents/agent-*.jsonl` files) and background shells/monitors. Phone: "live" panel under the tasks with timers and each subagent's current step; chats list shows `↳ 2 agents · Bash: swift test`. New WS message `.work`, `SessionStatus.work` brief |
 
 ## Needs a real device
 

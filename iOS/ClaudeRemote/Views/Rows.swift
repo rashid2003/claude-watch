@@ -81,6 +81,9 @@ struct SessionRowView: View {
                 ? ("◆ \(prompt.toolName): \(prompt.summary)", Theme.clay)
                 : ("◆ question · answer on mac", Theme.clay)
         }
+        if session.isWorking, let line = session.work?.line {
+            return ("↳ " + line, .secondary)
+        }
         if let t = session.tasks.first(where: { $0.status == .in_progress }) {
             return ("◐ " + (t.activeForm ?? t.subject), .secondary)
         }

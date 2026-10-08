@@ -3,19 +3,25 @@ import Foundation
 /// Turns a Claude Code transcript (.jsonl) into chat messages for the iPhone app:
 /// your prompts, Claude's text, one line per tool call (✓/✗ once its result arrives) and API errors.
 /// Thinking, sidechains (subagents), meta entries and bookkeeping lines are left out.
+/// Alongside, it follows what the chat is doing (`work`), including its subagents' transcripts.
 public final class ChatFeed {
     public let url: URL
     private var offset: UInt64 = 0
     private var parser = ChatParser()
+    private var subagents: SubagentFeeds
 
-    public init(url: URL) { self.url = url }
+    public init(url: URL) {
+        self.url = url
+        subagents = SubagentFeeds(transcript: url)
+    }
 
     /// New or updated messages since the last call (the first call returns the whole chat).
     /// A tool message is returned again, with the same id, when its result arrives.
     /// A partial last line is left for the next call.
     public func poll() -> [ChatMessage] {
+        defer { subagents.poll(&parser.work) }
         guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber else { return [] }
-        if size.uint64Value < offset { offset = 0; parser = ChatParser() }   // rewritten
+        if size.uint64Value < offset { offset = 0; parser = ChatParser(); subagents = SubagentFeeds(transcript: url) }   // rewritten
         guard size.uint64Value > offset, let h = try? FileHandle(forReadingFrom: url) else { return [] }
         defer { try? h.close() }
         try? h.seek(toOffset: offset)
@@ -33,11 +39,16 @@ public final class ChatFeed {
     /// Every message parsed so far.
     public var all: [ChatMessage] { parser.messages }
 
+    /// What the chat is doing, as of the last poll.
+    public var work: LiveWork { parser.work.live() }
+    public var workTracker: WorkTracker { parser.work }
+
     /// A feed that carries on from where this one is, without re-reading the file.
     public func copy() -> ChatFeed {
         let f = ChatFeed(url: url)
         f.offset = offset
         f.parser = parser
+        f.subagents = subagents
         return f
     }
 
@@ -92,6 +103,7 @@ public final class ChatFeed {
 /// Incremental transcript → message state. `consume` returns indices of added / changed messages.
 struct ChatParser {
     var messages: [ChatMessage] = []
+    var work = WorkTracker()
     private var toolIndex: [String: Int] = [:]   // tool_use id -> message index
 
     mutating func consume(_ line: Data) -> [Int] {
@@ -107,6 +119,7 @@ struct ChatParser {
         }
         guard let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
               let type = obj["type"] as? String, type == "user" || type == "assistant" else { return [] }
+        work.consume(obj)
         if obj["isSidechain"] as? Bool == true || obj["isMeta"] as? Bool == true { return [] }
         let uuid = obj["uuid"] as? String ?? UUID().uuidString
         let at = (obj["timestamp"] as? String).flatMap(TranscriptScanner.parseISO) ?? Date()
@@ -164,11 +177,9 @@ struct ChatParser {
     }
 
     private mutating func rawToolResult(_ line: Data) -> [Int] {
-        guard let r = line.range(of: Data("\"tool_use_id\":\"".utf8)) else { return [] }
-        let rest = line[r.upperBound...].prefix(80)
-        guard let end = rest.firstIndex(of: UInt8(ascii: "\"")) else { return [] }
-        let id = String(decoding: rest[..<end], as: UTF8.self)
+        guard let id = TranscriptScanner.toolUseId(inRaw: line) else { return [] }
         let isError = line.range(of: Data("\"is_error\":true".utf8)) != nil
+        work.result(id: id, isError: isError, at: TranscriptScanner.timestamp(inRaw: line) ?? Date())
         return resolve(id, ok: !isError).map { [$0] } ?? []
     }
 
@@ -176,7 +187,7 @@ struct ChatParser {
     static func userText(_ raw: String) -> String? {
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty || t.hasPrefix("<system-reminder>") || t.hasPrefix("<local-command-")
-            || t.hasPrefix("[Request interrupted") { return nil }
+            || t.hasPrefix("[Request interrupted") || t.hasPrefix("<task-notification>") { return nil }
         if t.hasPrefix("<command-name>"), let end = t.range(of: "</command-name>") {
             let cmd = t[t.index(t.startIndex, offsetBy: 14)..<end.lowerBound]
             let args = t.range(of: "<command-args>").flatMap { a in

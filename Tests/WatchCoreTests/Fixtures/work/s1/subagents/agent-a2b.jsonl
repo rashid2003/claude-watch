@@ -1,0 +1,2 @@
+{"parentUuid":null,"isSidechain":true,"agentId":"a2b","type":"user","message":{"role":"user","content":"Document it"},"uuid":"d1","timestamp":"2026-10-08T10:00:07.100Z"}
+{"isSidechain":true,"agentId":"a2b","type":"assistant","message":{"id":"dm1","content":[{"type":"tool_use","id":"dt1","name":"Edit","input":{"file_path":"/x/README.md","old_string":"a","new_string":"b"}}]},"uuid":"d2","timestamp":"2026-10-08T10:00:08.000Z"}
