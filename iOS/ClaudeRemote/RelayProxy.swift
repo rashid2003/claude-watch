@@ -30,7 +30,9 @@ final class RelayProxy: @unchecked Sendable {
             queue.async { [self] in
                 if self.info != info { stopLocked() }
                 self.info = info
-                if let port, listener != nil { return c.resume(returning: port) }
+                // A listener iOS tore down while suspended can linger without failing; only reuse a ready one.
+                if let port, let l = listener, l.state == .ready { return c.resume(returning: port) }
+                stopLocked()
                 startLocked(c)
             }
         }
@@ -38,6 +40,9 @@ final class RelayProxy: @unchecked Sendable {
     }
 
     func stop() { queue.async { [self] in stopLocked(); info = nil } }
+
+    /// Drops the listener and open streams so the next request starts fresh (after a failure or suspension).
+    func reset() { queue.async { [self] in stopLocked() } }
 
     private func stopLocked() {
         listener?.cancel()

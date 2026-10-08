@@ -55,6 +55,8 @@ final class RemoteStore {
     @ObservationIgnored private var streamTask: Task<Void, Never>?
     @ObservationIgnored private var socket: StreamSocket?
     @ObservationIgnored private var failures = 0
+    /// The wait between reconnect attempts; cancelled to retry at once.
+    @ObservationIgnored private var backoff: Task<Void, Never>?
     @ObservationIgnored private var lastMessageAt = Date()
     @ObservationIgnored private var messageIndex: [String: Int] = [:]
     @ObservationIgnored private var lastCacheWrite = Date.distantPast
@@ -166,11 +168,20 @@ final class RemoteStore {
         streamTask = nil
         socket?.close()
         socket = nil
+        RelayProxy.shared.reset()
         if connection == .connected { connection = .reconnecting }
     }
 
-    /// Reconnect now instead of waiting for the backoff (pull to refresh, return to foreground).
+    /// Retry now instead of waiting out the backoff (pull to refresh, the retry buttons). An attempt
+    /// already under way is left to finish, so pulling or scrolling repeatedly doesn't restart it.
     func reconnect() {
+        guard client != nil else { return }
+        guard streamTask != nil else { return start() }
+        backoff?.cancel()
+    }
+
+    /// Drops the connection and opens a new one (changing how to reach the Mac).
+    func restart() {
         stop()
         start()
     }
@@ -187,7 +198,7 @@ final class RemoteStore {
         credentials = c
         self.client = RemoteClient(credentials: c)
         activePath = nil
-        reconnect()
+        restart()
     }
 
     func didPair(_ c: Credentials) {
@@ -281,7 +292,11 @@ final class RemoteStore {
             failures += 1
             connection = failures < 3 ? .reconnecting : .offline
             await client.forgetBase()
-            try? await Task.sleep(for: .seconds(delay))
+            RelayProxy.shared.reset()
+            let wait = Task { _ = try? await Task.sleep(for: .seconds(delay)) }
+            backoff = wait
+            await wait.value
+            backoff = nil
             delay = min(delay * 2, 30)
         }
     }
