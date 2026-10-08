@@ -43,6 +43,10 @@ struct MacView: View {
                             kv("host", "\(host.host() ?? host.absoluteString):\(host.port ?? 7433)")
                         }
                         if let v = store.bridgeStatus?.version { kv("version", v) }
+                        if let s = store.bridgeStatus {
+                            kv("protocol", "mac \(s.protocolVersion ?? WireProtocol.unversioned) · iphone \(WireProtocol.current)")
+                        }
+                        kv("iphone", ClientInfo.thisApp.label)
                     }
                     .font(Theme.monoSmall)
                     .padding(.vertical, 10)
