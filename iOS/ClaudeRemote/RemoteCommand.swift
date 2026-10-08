@@ -36,7 +36,7 @@ struct RemoteCommand: Sendable {
     static func answer(chatId: String, promptId: String, decision: PromptDecision) -> RemoteCommand {
         let b = PromptAnswerBody(promptId: promptId, decision: decision)
         return .init("/v1/chats/\(seg(chatId))/prompt", b, requestId: b.requestId, key: Keys.prompt(promptId),
-                     label: decision == .deny ? "Deny" : "Allow")
+                     label: decision == .deny ? "Deny" : decision == .allowAlways ? "Always allow" : "Allow")
     }
 
     static func stop(chatId: String) -> RemoteCommand {

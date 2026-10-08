@@ -40,7 +40,7 @@ public struct APNsKey: Codable, Sendable, Equatable {
 }
 
 public struct PushNote: Sendable {
-    public var category: String       // PROMPT, CHAT, ACCOUNT
+    public var category: String       // a PushCategory
     public var title: String
     public var body: String
     public var threadId: String?
@@ -51,6 +51,14 @@ public struct PushNote: Sendable {
                 userInfo: [String: String] = [:]) {
         self.category = category; self.title = String(title.prefix(120)); self.body = String(body.prefix(240))
         self.threadId = threadId; self.collapseId = collapseId.map { String($0.prefix(64)) }; self.userInfo = userInfo
+    }
+
+    /// A pending prompt. Carries `chatId` and `promptId` so the phone can answer from the notification.
+    public static func prompt(_ p: PendingPrompt, account: String) -> PushNote {
+        PushNote(category: PushCategory.of(p), title: account + " · " + p.chatTitle,
+                 body: p.kind == .question ? p.summary : "\(p.toolName): \(p.summary)",
+                 threadId: p.chatId, collapseId: "prompt-" + p.chatId,
+                 userInfo: ["chatId": p.chatId, "promptId": p.id, "profileId": p.profileId])
     }
 
     func payload() -> Data {

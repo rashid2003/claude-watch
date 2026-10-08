@@ -34,7 +34,7 @@ Mac 0.4.0 is installed. iPhone build from this branch is uploading to TestFlight
 
 | | Item | Branch | Scope |
 |---|---|---|---|
-| 📋 | **Allow / Deny in the notification** | `feat/actionable-prompts` | Mac sends prompt pushes with a category; iPhone registers Allow / Always / Deny actions and answers from the notification (background task, no app launch) |
+| 🚧 | **Allow / Deny in the notification** | `feat/actionable-prompts` | Built, needs a device test. Prompt pushes carry `PROMPT` / `PROMPT_ALWAYS` (`_SHELL` for Bash) + `chatId` / `promptId`; the phone answers in a background task, and with the app lock on, Bash prompts offer only Deny / Open |
 | 📋 | **Open at login** | `feat/launch-at-login` | Mac Settings toggle using `SMAppService.mainApp`, on by default after first run, reflects System Settings changes |
 | 📋 | **Drafts follow you between devices** | `feat/draft-sync` | Unsent text in the phone composer shows on the Mac and the other way round. The Mac reads/writes the Claude desktop composer via Accessibility, never overwriting text the user is typing |
 | 📋 | **Live Activity shows when the Mac is unreachable** | `feat/live-activity-offline` | Mac sets `staleDate` and sends heartbeats. Widget renders a "disconnected" state when stale; the phone marks it locally when it loses the Mac |

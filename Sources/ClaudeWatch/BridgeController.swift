@@ -184,7 +184,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     }
 
     func pushSystem(title: String, body: String) {
-        push(PushNote(category: "SYSTEM", title: title, body: body, collapseId: "system"), .system)
+        push(PushNote(category: PushCategory.system, title: title, body: body, collapseId: "system"), .system)
     }
 
     func systemHealth() -> SystemHealth? {
@@ -494,22 +494,18 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         if lock.withLock({ let f = firstSnapshot; firstSnapshot = false; return f }) { return }
 
         for p in newPrompts {
-            let title = accountName(s, p.profileId) + " · " + p.chatTitle
-            let body = p.kind == .question ? p.summary : "\(p.toolName): \(p.summary)"
-            push(PushNote(category: p.kind == .question ? "CHAT" : "PROMPT", title: title, body: body,
-                          threadId: p.chatId, collapseId: "prompt-" + p.chatId,
-                          userInfo: ["chatId": p.chatId, "promptId": p.id, "profileId": p.profileId]), .prompt)
+            push(.prompt(p, account: accountName(s, p.profileId)), .prompt)
         }
         let recent = lock.withLock { touched }
         for (sess, before) in changes where recent[sess.id] != nil {
             let info = ["chatId": sess.id, "profileId": sess.info.profileId]
             let title = accountName(s, sess.info.profileId) + " · " + sess.info.title
             if sess.activity == .idle, before == .working || before == .waiting {
-                push(PushNote(category: "CHAT", title: title, body: "Claude finished its turn.", threadId: sess.id,
+                push(PushNote(category: PushCategory.chat, title: title, body: "Claude finished its turn.", threadId: sess.id,
                               collapseId: "chat-" + sess.id, userInfo: info), .finished)
             } else if sess.activity == .failed, before != .failed {
                 let why = sess.tail.lastRateLimit?.text ?? sess.info.desktopError ?? "The chat stopped with an error."
-                push(PushNote(category: "CHAT", title: title, body: why, threadId: sess.id,
+                push(PushNote(category: PushCategory.chat, title: title, body: why, threadId: sess.id,
                               collapseId: "chat-" + sess.id, userInfo: info), .failed)
             }
         }
@@ -520,13 +516,13 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         let note: PushNote?
         switch e {
         case .accountFree(let p):
-            note = PushNote(category: "ACCOUNT", title: "\(p.name) is free", body: "Nothing running. Ready for the next task.",
+            note = PushNote(category: PushCategory.account, title: "\(p.name) is free", body: "Nothing running. Ready for the next task.",
                             collapseId: "acct-" + p.id, userInfo: ["profileId": p.id])
         case .limitReset(let p):
-            note = PushNote(category: "ACCOUNT", title: "\(p.name) limit reset", body: "The account can be used again.",
+            note = PushNote(category: PushCategory.account, title: "\(p.name) limit reset", body: "The account can be used again.",
                             collapseId: "acct-" + p.id, userInfo: ["profileId": p.id])
         case .capSoon(let p, let k, let at):
-            note = PushNote(category: "ACCOUNT", title: "\(p.name) nearing its \(k == .weekly ? "weekly" : "5-hour") limit",
+            note = PushNote(category: PushCategory.account, title: "\(p.name) nearing its \(k == .weekly ? "weekly" : "5-hour") limit",
                             body: "At this pace it hits the cap in ~\(Fmt.duration(at.timeIntervalSinceNow)).",
                             collapseId: "acct-" + p.id, userInfo: ["profileId": p.id])
         default: note = nil
