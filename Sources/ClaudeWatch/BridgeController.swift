@@ -19,6 +19,12 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     private let lock = NSLock()
     private var latest: Snapshot?
     private var touched: [String: Date] = [:]          // chats the phone acted on -> when
+    /// Replies sent from the phone while their chat was busy.
+    let replies = ReplyQueue(url: Paths.replyQueue)
+    private var sentAt: [String: Date] = [:]           // chat -> when a reply last went out
+    private var draining = Set<String>()                // chats whose queued replies are being sent
+    /// Parsed transcripts, so reopening a chat on the phone only reads what's new.
+    private let transcripts = TranscriptCache()
     private var lastActivity: [String: SessionStatus.Activity] = [:]
     private var knownPrompts = Set<String>()
     private var firstSnapshot = true
@@ -97,6 +103,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         server.publish(snapshot: merged)
         notifyTransitions(merged)
         driveLiveActivities(merged)
+        drainReplies(merged)
         evaluateKeepAwake()
         syncRelay()
     }
@@ -138,6 +145,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     private func merge(_ s: Snapshot) -> Snapshot {
         var m = s
         m.systemLevel = lock.withLock { health?.level }
+        m.replies = replies.all
         let extra = broker.prompts
         guard !extra.isEmpty else { return m }
         m.prompts += extra
@@ -220,13 +228,13 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     }
 
     func messages(chatId: String, before: Int?, limit: Int) -> MessagesPage? {
-        transcript(chatId).map { ChatFeed.page(url: $0, before: before, limit: limit) }
+        transcript(chatId).map { transcripts.page($0, before: before, limit: limit) }
     }
 
     func subscribe(chatId: String) -> (source: MessageSource, initial: [ChatMessage])? {
         guard let url = transcript(chatId) else { return nil }
-        let feed = ChatFeed(url: url)
-        return (feed, feed.poll())
+        let (all, feed) = transcripts.open(url)
+        return (feed, all)
     }
 
     func folders(profileId: String) -> [FolderSuggestion] {
@@ -258,8 +266,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     func check(_ command: BridgeCommand) -> (Int, String)? {
         switch command {
         case .reply(let id, _):
-            guard let s = session(id) else { return (404, "That chat isn't listed on the Mac any more") }
-            if s.activity == .working || runner.isRunning(sessionId: id) { return (409, HeadlessRunner.busyMessage) }
+            guard session(id) != nil else { return (404, "That chat isn't listed on the Mac any more") }
         case .answer(_, let pid, _):
             guard snapshot()?.prompts.contains(where: { $0.id == pid }) == true else { return (409, "That prompt is no longer pending") }
         case .stop(let id):
@@ -303,16 +310,58 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         }
     }
 
+    /// A chat can't take a reply now: Claude is working or waiting on a prompt, a background run is
+    /// going, or a reply went out moments ago and the transcript hasn't caught up yet.
+    private func isBusy(_ s: SessionStatus) -> Bool {
+        let recent = lock.withLock { sentAt[s.id] }.map { Date().timeIntervalSince($0) < 8 } ?? false
+        return s.activity == .working || s.activity == .waiting || runner.isRunning(sessionId: s.id) || recent
+    }
+
+    /// Sends a reply now: in the background with the account's CLI token, else typed into the desktop window.
+    private func send(_ text: String, to s: SessionStatus) -> (JobStatus, String?) {
+        guard let p = profile(s.info.profileId) else { return (.failed, "Chat not found") }
+        lock.withLock { sentAt[s.id] = Date() }
+        if TokenStore.get(p.id) == nil {
+            return result(UIRetry.type(message: text, session: s.info, profile: p).map { _ in "Typed into the \(p.name) window" })
+        }
+        return result(runner.reply(text, session: s.info, profile: p, activity: s.activity)
+            .map { "Sent in the background (pid \($0))" })
+    }
+
+    /// Sends queued replies for chats that have gone idle, all of a chat's queued replies as one message.
+    private func drainReplies(_ snap: Snapshot) {
+        for id in replies.waitingChats {
+            guard let s = snap.sessions.first(where: { $0.id == id }), !isBusy(s) else { continue }
+            guard lock.withLock({ draining.insert(id).inserted }) else { continue }
+            work.async { [self] in
+                defer { lock.withLock { _ = draining.remove(id) } }
+                guard let fresh = session(id), !isBusy(fresh) else { return }
+                let batch = replies.take(chatId: id)
+                guard !batch.isEmpty else { return }
+                let (status, reason) = send(ReplyQueue.combined(batch), to: fresh)
+                if status != .done { replies.fail(batch, error: reason ?? "Couldn't send it") }
+                republish()
+                monitor.refreshNow()
+            }
+        }
+    }
+
     /// Runs one command on the remote-actions queue (may block for seconds).
     private func run(_ command: BridgeCommand) -> (JobStatus, String?) {
         switch command {
         case .reply(let id, let text):
-            guard let s = session(id), let p = profile(s.info.profileId) else { return (.failed, "Chat not found") }
-            if TokenStore.get(p.id) == nil {
-                return result(UIRetry.type(message: text, session: s.info, profile: p).map { _ in "Typed into the \(p.name) window" })
+            guard let s = session(id) else { return (.failed, "Chat not found") }
+            if isBusy(s) || replies.has(chatId: id) {   // behind earlier queued replies too, so order holds
+                replies.add(chatId: id, text: text)
+                republish()
+                return (.done, "Queued. It's sent when Claude finishes this turn.")
             }
-            return result(runner.reply(text, session: s.info, profile: p, activity: s.activity)
-                .map { "Sent in the background (pid \($0))" })
+            return send(text, to: s)
+
+        case .cancelReply(let rid):
+            guard replies.remove(id: rid) else { return (.failed, "That message was already sent") }
+            republish()
+            return (.done, nil)
 
         case .answer(let chatId, let promptId, let decision):
             guard let prompt = snapshot()?.prompts.first(where: { $0.id == promptId }) else { return (.failed, "Prompt no longer pending") }

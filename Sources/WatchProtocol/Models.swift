@@ -183,6 +183,19 @@ public struct AccountStatus: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// A reply sent from the phone while its chat was busy. The Mac sends it once the chat goes idle.
+public struct QueuedReply: Codable, Hashable, Sendable, Identifiable {
+    public var id: String
+    public var chatId: String
+    public var text: String
+    public var at: Date
+    /// Set when sending it failed; it then stays until removed.
+    public var error: String?
+    public init(id: String = UUID().uuidString, chatId: String, text: String, at: Date = Date(), error: String? = nil) {
+        self.id = id; self.chatId = chatId; self.text = text; self.at = at; self.error = error
+    }
+}
+
 public struct Snapshot: Codable, Sendable {
     public var at: Date
     public var accounts: [AccountStatus]
@@ -196,16 +209,18 @@ public struct Snapshot: Codable, Sendable {
     public var prompts: [PendingPrompt] = []
     /// The Mac's overall resource level (nil from Macs without system health).
     public var systemLevel: HealthLevel? = nil
+    /// Replies waiting for their chat to finish its turn (bridge only).
+    public var replies: [QueuedReply] = []
 
     public init(at: Date, accounts: [AccountStatus], queue: [RetryItem], engineOwner: Bool, scanning: Bool,
                 moves: [PendingMove] = [], locations: [ChatLocation] = [], profiles: [Profile] = [],
-                prompts: [PendingPrompt] = [], systemLevel: HealthLevel? = nil) {
+                prompts: [PendingPrompt] = [], systemLevel: HealthLevel? = nil, replies: [QueuedReply] = []) {
         self.at = at; self.accounts = accounts; self.queue = queue; self.engineOwner = engineOwner
         self.scanning = scanning; self.moves = moves; self.locations = locations; self.profiles = profiles
-        self.prompts = prompts; self.systemLevel = systemLevel
+        self.prompts = prompts; self.systemLevel = systemLevel; self.replies = replies
     }
 
-    enum CodingKeys: String, CodingKey { case at, accounts, queue, engineOwner, scanning, moves, locations, profiles, prompts, systemLevel }
+    enum CodingKeys: String, CodingKey { case at, accounts, queue, engineOwner, scanning, moves, locations, profiles, prompts, systemLevel, replies }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -219,7 +234,11 @@ public struct Snapshot: Codable, Sendable {
         profiles = try c.decodeIfPresent([Profile].self, forKey: .profiles) ?? []
         prompts = try c.decodeIfPresent([PendingPrompt].self, forKey: .prompts) ?? []
         systemLevel = try c.decodeIfPresent(HealthLevel.self, forKey: .systemLevel)
+        replies = try c.decodeIfPresent([QueuedReply].self, forKey: .replies) ?? []
     }
+
+    /// Replies queued for one chat, oldest first.
+    public func replies(forChat id: String) -> [QueuedReply] { replies.filter { $0.chatId == id } }
 
     /// Every listed chat across accounts, newest activity first.
     public var sessions: [SessionStatus] {

@@ -35,6 +35,10 @@ final class RemoteStore {
     private(set) var olderCursor: Int?
     private(set) var loadingOlder = false
     private(set) var messagesLoaded = false
+    /// The transcript on screen came from the disk cache and the Mac's copy hasn't arrived yet.
+    private(set) var messagesStale = false
+    @ObservationIgnored private var cacheSave: Task<Void, Never>?
+    @ObservationIgnored private var prefetching = false
 
     private(set) var jobs: [String: Job] = [:]
     /// The Mac's resources while a view watches them (`watchSystem`), with up to 30 minutes of history.
@@ -222,6 +226,7 @@ final class RemoteStore {
         stop()
         Keychain.delete()
         SnapshotCache.clear()
+        MessageCache.clear()
         UserDefaults.standard.removeObject(forKey: Self.registeredTokenKey)
         live.paired(nil)
         credentials = nil
@@ -305,6 +310,7 @@ final class RemoteStore {
         Task {
             await refreshStatus()
             await registerPushIfNeeded()
+            await prefetchRecent()
         }
     }
 
@@ -325,10 +331,12 @@ final class RemoteStore {
                 messages = msgs
                 olderCursor = before
                 rebuildIndex()
+                messagesStale = false
             } else {
                 upsert(msgs)
             }
             messagesLoaded = true
+            saveOpenChat(after: reset ? 0 : 2)
         case .job(let j):
             record(j)
         case .system(let h):
@@ -369,10 +377,19 @@ final class RemoteStore {
         guard openChatId != id else { return }
         openChatId = id
         if isPreview { return }
-        messages = []
-        messageIndex = [:]
-        olderCursor = nil
-        messagesLoaded = false
+        cacheSave?.cancel()
+        if let cached = MessageCache.load(id) {
+            messages = cached.messages
+            olderCursor = cached.before
+            messagesLoaded = true
+            messagesStale = true
+        } else {
+            messages = []
+            olderCursor = nil
+            messagesLoaded = false
+            messagesStale = false
+        }
+        rebuildIndex()
         if let socket, connection == .connected {
             Task { try? await socket.send(WSClientMessage(type: .subscribe, chatId: id)) }
         }
@@ -380,6 +397,7 @@ final class RemoteStore {
 
     func close(chat id: String) {
         guard openChatId == id else { return }
+        if !isPreview, !isDemo, !messagesStale { saveOpenChat(after: 0) }
         openChatId = nil
         if let socket, connection == .connected {
             Task { try? await socket.send(WSClientMessage(type: .unsubscribe, chatId: id)) }
@@ -399,6 +417,34 @@ final class RemoteStore {
             rebuildIndex()
         } catch {
             show(error)
+        }
+    }
+
+    /// Writes the open chat's transcript to the disk cache, `after` seconds from now (coalesced).
+    private func saveOpenChat(after seconds: Double) {
+        guard let id = openChatId, !isPreview, !isDemo else { return }
+        let msgs = messages, cursor = olderCursor
+        cacheSave?.cancel()
+        cacheSave = Task.detached(priority: .utility) {
+            if seconds > 0 { try? await Task.sleep(for: .seconds(seconds)) }
+            guard !Task.isCancelled else { return }
+            MessageCache.save(id, messages: msgs, before: cursor)
+        }
+    }
+
+    /// Fetches the latest messages of the chats most likely to be opened next, so they open from cache.
+    private func prefetchRecent() async {
+        guard !prefetching, !isPreview, !isDemo, let snap = snapshot else { return }
+        prefetching = true
+        defer { prefetching = false }
+        let recent = snap.sessions.sorted { $0.info.lastActivityAt > $1.info.lastActivityAt }.prefix(6)
+        for s in recent where s.id != openChatId {
+            guard let client, connection == .connected else { return }
+            let cachedAt = await Task.detached(priority: .utility) { MessageCache.load(s.id)?.savedAt }.value
+            if let cachedAt, cachedAt >= s.info.lastActivityAt { continue }
+            guard let page = try? await client.messages(chatId: s.id, before: nil, limit: 200) else { continue }
+            let id = s.id
+            await Task.detached(priority: .utility) { MessageCache.save(id, messages: page.messages, before: page.before) }.value
         }
     }
 

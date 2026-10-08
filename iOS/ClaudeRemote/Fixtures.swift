@@ -94,7 +94,9 @@ enum Fixtures {
                                 toolName: "Bash", summary: "dig +short MX lajward.dev",
                                 detail: "dig +short MX lajward.dev && dig +short TXT _dmarc.lajward.dev",
                                 source: .desktop, kind: .permission, at: now.addingTimeInterval(-200),
-                                canAllowAlways: true)])
+                                canAllowAlways: true)],
+        replies: [QueuedReply(id: "q1", chatId: "local_a2", text: "also check the DKIM record",
+                              at: now.addingTimeInterval(-30))])
 
     /// Accounts but no chats, prompts, retries or moves: for the empty states.
     static var emptySnapshot: Snapshot {

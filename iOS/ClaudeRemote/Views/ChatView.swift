@@ -11,10 +11,50 @@ struct ChatView: View {
     @State private var tasksExpanded = false
     @State private var atBottom = true
     @State private var moveTarget: ChatLocation?
+    @State private var openToolGroups = Set<String>()
+    @AppStorage("chat.hideTools") private var hideTools = false
     @FocusState private var composerFocused: Bool
 
     private var session: SessionStatus? { store.snapshot?.session(chatId) }
     private var prompts: [PendingPrompt] { store.snapshot?.prompts(forChat: chatId) ?? [] }
+    private var queued: [QueuedReply] { store.snapshot?.replies(forChat: chatId) ?? [] }
+
+    /// A transcript line: a message, or a run of tool calls folded into one row.
+    private enum Line: Identifiable {
+        case message(ChatMessage)
+        case tools([ChatMessage])
+        var id: String {
+            switch self {
+            case .message(let m): m.id
+            case .tools(let ms): "tools:" + ms[0].id
+            }
+        }
+    }
+
+    /// Two or more tool calls in a row become one collapsible group; hidden altogether with `hideTools`.
+    private var lines: [Line] {
+        var out: [Line] = []
+        var run: [ChatMessage] = []
+        func flush() {
+            if run.count == 1 { out.append(.message(run[0])) } else if run.count > 1 { out.append(.tools(run)) }
+            run = []
+        }
+        for m in store.messages {
+            if m.kind == .tool {
+                if !hideTools { run.append(m) }
+            } else {
+                flush()
+                out.append(.message(m))
+            }
+        }
+        flush()
+        return out
+    }
+
+    private func toolGroupBinding(_ id: String) -> Binding<Bool> {
+        Binding(get: { openToolGroups.contains(id) },
+                set: { if $0 { openToolGroups.insert(id) } else { openToolGroups.remove(id) } })
+    }
 
     var body: some View {
         messageList
@@ -95,6 +135,19 @@ struct ChatView: View {
                     Label("Move to account…", systemImage: "arrow.left.arrow.right")
                 }
                 .disabled(destinations.isEmpty || !store.canSend || store.isPending(Keys.moveChat(chatId)))
+            }
+            Button {
+                hideTools.toggle()
+            } label: {
+                Label(hideTools ? "Show tool calls" : "Hide tool calls",
+                      systemImage: hideTools ? "eye" : "eye.slash")
+            }
+            if !openToolGroups.isEmpty {
+                Button {
+                    withAnimation(.snappy) { openToolGroups.removeAll() }
+                } label: {
+                    Label("Collapse tool calls", systemImage: "rectangle.compress.vertical")
+                }
             }
             Button {
                 UIPasteboard.general.string = session?.info.cliSessionId ?? chatId
@@ -198,8 +251,20 @@ struct ChatView: View {
                         EmptyNote(text: "no messages yet", hint: "the transcript shows up here as the chat runs")
                             .padding(.horizontal, 8)
                     }
-                    ForEach(store.messages) { m in
-                        MessageRow(message: m).id(m.id)
+                    ForEach(lines) { line in
+                        switch line {
+                        case .message(let m): MessageRow(message: m).id(m.id)
+                        case .tools(let ms): ToolGroupRow(tools: ms, expanded: toolGroupBinding(line.id)).id(line.id)
+                        }
+                    }
+                    ForEach(queued) { r in
+                        QueuedReplyRow(reply: r, removing: store.isPending(Keys.queued(r.id))) {
+                            Task { await store.perform(.cancelReply(id: r.id)) }
+                        }
+                        .transition(.opacity)
+                    }
+                    if store.messagesStale && store.connection == .connected {
+                        Text("refreshing…").font(Theme.monoTiny).foregroundStyle(.secondary).padding(.horizontal, 8)
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
@@ -216,6 +281,9 @@ struct ChatView: View {
             .onChange(of: store.messages.last?.id) { _, _ in
                 if atBottom { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
             }
+            .onChange(of: queued.map(\.id)) { _, _ in
+                if atBottom { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
+            }
         }
     }
 
@@ -230,9 +298,8 @@ struct ChatView: View {
             }
             if session?.isWorking == true {
                 workingBar.transition(.opacity)
-            } else {
-                composer.transition(.opacity)
             }
+            composer
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: prompts.map(\.id))
         .animation(.snappy, value: session?.isWorking)
@@ -263,6 +330,8 @@ struct ChatView: View {
     }
 
     private var sending: Bool { store.isPending(Keys.reply(chatId)) }
+    /// Claude is mid-turn (or waiting on a prompt), so a reply is queued on the Mac.
+    private var busy: Bool { session?.isWorking == true || session?.activity == .waiting || !prompts.isEmpty || queued.contains { $0.error == nil } }
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -282,7 +351,8 @@ struct ChatView: View {
             HStack(alignment: .bottom, spacing: 8) {
                 HStack(alignment: .center, spacing: 0) {
                     Text("> ").foregroundStyle(Theme.clay).fontWeight(.bold)
-                    TextField(store.canSend ? "reply" : Theme.label(store.connection) + "…", text: $draft, axis: .vertical)
+                    TextField(store.canSend ? (busy ? "queue a message" : "reply") : Theme.label(store.connection) + "…",
+                              text: $draft, axis: .vertical)
                         .lineLimit(1...6)
                         .focused($composerFocused)
                         .disabled(!store.canSend)
@@ -306,7 +376,9 @@ struct ChatView: View {
                 }
             }
             if sending {
-                Text("sending…").font(Theme.monoTiny).foregroundStyle(.secondary).transition(.opacity)
+                Text(busy ? "queueing…" : "sending…").font(Theme.monoTiny).foregroundStyle(.secondary).transition(.opacity)
+            } else if busy, !draft.isEmpty {
+                Text("sends when Claude finishes this turn").font(Theme.monoTiny).foregroundStyle(.secondary).transition(.opacity)
             }
         }
         .animation(.snappy, value: sending)

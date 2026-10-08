@@ -30,6 +30,17 @@ public final class ChatFeed {
         return touched.sorted().map { parser.messages[$0] }
     }
 
+    /// Every message parsed so far.
+    public var all: [ChatMessage] { parser.messages }
+
+    /// A feed that carries on from where this one is, without re-reading the file.
+    public func copy() -> ChatFeed {
+        let f = ChatFeed(url: url)
+        f.offset = offset
+        f.parser = parser
+        return f
+    }
+
     public static func messages(fromLines lines: [Data]) -> [ChatMessage] {
         var p = ChatParser()
         for l in lines { _ = p.consume(l) }
@@ -173,5 +184,41 @@ struct ChatParser {
             return (String(cmd) + (args.isEmpty ? "" : " " + args))
         }
         return t
+    }
+}
+
+/// Parsed transcripts kept between opens, so reopening a chat (or paging back) only reads what was
+/// appended since. Least recently used chats are dropped past `capacity`.
+public final class TranscriptCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var feeds: [URL: (feed: ChatFeed, used: Date)] = [:]
+    private let capacity: Int
+
+    public init(capacity: Int = 16) { self.capacity = capacity }
+
+    /// The whole chat so far, and a feed that reports what's appended from here on.
+    public func open(_ url: URL) -> (messages: [ChatMessage], feed: ChatFeed) {
+        lock.withLock {
+            let f = caughtUp(url)
+            return (f.all, f.copy())
+        }
+    }
+
+    /// Like `ChatFeed.page`, from the cache.
+    public func page(_ url: URL, before: Int?, limit: Int) -> MessagesPage {
+        let all = lock.withLock { caughtUp(url).all }
+        let end = min(before ?? all.count, all.count)
+        let start = max(0, end - max(1, limit))
+        return MessagesPage(messages: Array(all[start..<end]), before: start > 0 ? start : nil)
+    }
+
+    private func caughtUp(_ url: URL) -> ChatFeed {
+        let f = feeds[url]?.feed ?? ChatFeed(url: url)
+        _ = f.poll()
+        feeds[url] = (f, Date())
+        if feeds.count > capacity, let oldest = feeds.min(by: { $0.value.used < $1.value.used })?.key {
+            feeds[oldest] = nil
+        }
+        return f
     }
 }
