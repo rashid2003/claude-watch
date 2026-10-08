@@ -79,4 +79,26 @@ final class WireTests: XCTestCase {
         let old = #"{"macName":"Mac","version":"1","warnings":[],"pushConfigured":false,"notify":{}}"#
         XCTAssertNil(try WireCoder.decoder.decode(BridgeStatus.self, from: Data(old.utf8)).relay)
     }
+
+    func testLiveWorkTravelsAndOldPayloadsDecode() throws {
+        let w = LiveWork(running: [RunningTool(id: "t1", name: "Bash", summary: "Bash: swift test", startedAt: t)],
+                         agents: [AgentRun(id: "a1", description: "Survey", type: "Explore", step: "Read App.swift",
+                                           steps: 4, startedAt: t)],
+                         shells: [BackgroundShell(id: "b1", summary: "dev server", startedAt: t)])
+        guard case .work(let id, let back) = try roundTrip(WSServerMessage.work(chatId: "local_1", work: w)) else {
+            return XCTFail("type changed")
+        }
+        XCTAssertEqual(id, "local_1")
+        XCTAssertEqual(back, w)
+        XCTAssertEqual(w.line, "1 agent · 1 shell · Bash: swift test")
+        XCTAssertNil(LiveWork().line)
+        XCTAssertNil(LiveWork().brief)
+
+        var snap = sampleSnapshot()
+        snap.accounts[0].sessions[0].work = w.brief
+        XCTAssertEqual(try roundTrip(snap).accounts[0].sessions[0].work?.agents.first?.steps, 0, "brief drops steps")
+        // A snapshot from a Mac without it.
+        XCTAssertNil(try roundTrip(sampleSnapshot()).accounts[0].sessions[0].work)
+        XCTAssertEqual(try WireCoder.decoder.decode(LiveWork.self, from: Data("{}".utf8)), LiveWork())
+    }
 }

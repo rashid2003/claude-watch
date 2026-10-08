@@ -342,7 +342,9 @@ public final class Monitor {
                     info: s, activity: activity, tail: tail,
                     tasks: s.cliSessionId.map(TaskReader.tasks) ?? [],
                     tokens5h: b.sum(from: now.addingTimeInterval(-5 * 3600)).weighted,
-                    tokens7d: b.sum(from: now.addingTimeInterval(-7 * 86400)).weighted))
+                    tokens7d: b.sum(from: now.addingTimeInterval(-7 * 86400)).weighted,
+                    // Background work counts while the chat's process lives; otherwise only during a turn.
+                    work: activity == .working || live.contains(s.id) ? scanner.work(for: s, now: now) : nil))
             }
             statuses.sort { a, b in
                 let rank: (SessionStatus.Activity) -> Int = { [.working: 0, .waiting: 1, .failed: 2, .idle: 3][$0]! }

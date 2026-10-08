@@ -54,6 +54,8 @@ struct FileScanState: Codable {
     var lastMsgId: String?
     var lastMsgCount = TokenCount()
     var lastMsgAt: Date?
+    /// Main transcripts only: running tools, subagents, background tasks.
+    var work: WorkTracker?
 }
 
 struct ScanCache: Codable {
@@ -92,6 +94,12 @@ public final class TranscriptScanner {
     func tail(forCli id: String?) -> TranscriptTail {
         guard let id, let main = transcriptURL(cliSessionId: id) else { return TranscriptTail() }
         return cache.files[main.path]?.tail ?? TranscriptTail()
+    }
+
+    /// What the session's transcript says is running (running items only), nil when nothing is.
+    public func work(for session: SessionInfo, now: Date = Date()) -> LiveWork? {
+        guard let id = session.cliSessionId, let main = transcriptURL(cliSessionId: id) else { return nil }
+        return cache.files[main.path]?.work?.live(now: now).brief
     }
 
     public func buckets(for sessionId: String) -> TokenBuckets { cache.buckets[sessionId] ?? TokenBuckets() }
@@ -219,6 +227,9 @@ public final class TranscriptScanner {
             guard st.isMain else { return }
             st.tail.last = line.range(of: Data("\"tool_result\"".utf8)) != nil ? .toolResult : .userPrompt
             if let ts = Self.timestamp(inRaw: line) { st.tail.lastAt = ts }
+            if let id = Self.toolUseId(inRaw: line) {
+                st.work?.result(id: id, isError: line.range(of: Data("\"is_error\":true".utf8)) != nil, at: st.tail.lastAt ?? Date())
+            }
             return
         }
         guard let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else { return }
@@ -227,6 +238,10 @@ public final class TranscriptScanner {
         let at = (obj["timestamp"] as? String).flatMap(Self.parseISO) ?? Date()
         let sidechain = obj["isSidechain"] as? Bool ?? false
 
+        if st.isMain, !sidechain {
+            if st.work == nil { st.work = WorkTracker() }
+            st.work?.consume(obj)
+        }
         if type == "user" {
             if obj["isMeta"] as? Bool == true || !st.isMain || sidechain { return }
             let msg = obj["message"] as? [String: Any]
@@ -275,6 +290,13 @@ public final class TranscriptScanner {
         }
         st.tail.lastAt = at
         st.tail.lastSuccessAt = at
+    }
+
+    static func toolUseId(inRaw line: Data) -> String? {
+        guard let r = line.range(of: Data("\"tool_use_id\":\"".utf8)) else { return nil }
+        let rest = line[r.upperBound...].prefix(80)
+        guard let end = rest.firstIndex(of: UInt8(ascii: "\"")) else { return nil }
+        return String(decoding: rest[..<end], as: UTF8.self)
     }
 
     static func timestamp(inRaw line: Data) -> Date? {

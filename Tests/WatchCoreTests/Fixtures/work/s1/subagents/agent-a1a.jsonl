@@ -1,0 +1,4 @@
+{"parentUuid":null,"isSidechain":true,"agentId":"a1a","type":"user","message":{"role":"user","content":"Look at ChatParser"},"uuid":"s1","timestamp":"2026-10-08T10:00:06.100Z"}
+{"isSidechain":true,"agentId":"a1a","type":"assistant","message":{"id":"sm1","content":[{"type":"tool_use","id":"st1","name":"Read","input":{"file_path":"/x/Sources/WatchCore/ChatFeed.swift"}}]},"uuid":"s2","timestamp":"2026-10-08T10:00:07.000Z"}
+{"isSidechain":true,"agentId":"a1a","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"st1","content":"..."}]},"uuid":"s3","timestamp":"2026-10-08T10:00:07.500Z"}
+{"isSidechain":true,"agentId":"a1a","type":"assistant","message":{"id":"sm2","content":[{"type":"tool_use","id":"st2","name":"Grep","input":{"pattern":"consume"}}]},"uuid":"s4","timestamp":"2026-10-08T10:00:08.000Z"}

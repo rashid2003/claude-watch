@@ -127,12 +127,15 @@ public struct SessionStatus: Codable, Hashable, Sendable, Identifiable {
     public var tasks: [TaskItem]
     public var tokens5h: Double        // weighted, trailing 5h
     public var tokens7d: Double
+    /// Running tool calls, subagents and background tasks (running items only); nil when there are none
+    /// or from Macs without it.
+    public var work: LiveWork?
     public var id: String { info.id }
 
     public init(info: SessionInfo, activity: Activity, tail: TranscriptTail, tasks: [TaskItem],
-                tokens5h: Double, tokens7d: Double) {
+                tokens5h: Double, tokens7d: Double, work: LiveWork? = nil) {
         self.info = info; self.activity = activity; self.tail = tail; self.tasks = tasks
-        self.tokens5h = tokens5h; self.tokens7d = tokens7d
+        self.tokens5h = tokens5h; self.tokens7d = tokens7d; self.work = work
     }
 }
 
