@@ -59,6 +59,26 @@ claude-watch move local_… --to 1:eb9c --now          # window 1, org eb9c…, 
 claude-watch moves                                   # pending + history
 ```
 
+## System health
+
+The **system** section of the main window, and the Mac tab on the iPhone, show memory (with macOS
+memory pressure), swap, CPU load and free disk with a 30-minute trend, plus the apps using the most
+memory or CPU. Helper processes count toward their app, and each Claude profile is its own row.
+
+The Mac is rated **under pressure** or **critical** from: swap over 75 / 90 %, free disk under 50 / 20 GB
+(set in Settings), 5-minute load over 2× / 4× the core count, memory pressure warn / critical, and thermal
+serious / critical. Once a level has held for a minute you get a notification on the Mac and a push
+on the iPhone (switch it off under **notify › mac under pressure**). It repeats only when things get
+worse, or after the Mac has been fine for 30 minutes.
+
+From either device you can **Quit** an app (like ⌘Q), **Kill** a process (your own processes only,
+never core macOS ones), **close idle Claude windows** (profiles with no chat working or waiting on you),
+and **free disk** (Trash, Xcode DerivedData, unavailable simulators, npm and Homebrew caches).
+
+**Auto-act** (Settings › system health, off by default): once the Mac has stayed critical for a
+delay (2 minutes by default), Session Watch closes idle Claude windows and quits the apps you listed,
+and cleans the chosen caches if disk is what's critical. It does this once per episode and tells you what it did.
+
 ## Retry modes
 
 | Mode | How | Needs |
