@@ -97,9 +97,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let action = response.actionIdentifier
 
         switch action {
-        case Notifications.Action.allow, Notifications.Action.deny:
-            guard let chatId, let promptId else { return }
-            let decision: PromptDecision = action == Notifications.Action.allow ? .allow : .deny
+        case Notifications.Action.allow, Notifications.Action.always, Notifications.Action.deny:
+            // The same command PromptCard sends; may run with the app launched in the background, no UI.
+            guard let chatId, let promptId, let decision = Notifications.decision(for: action) else { return }
             _ = await Notifications.runInBackground(.answer(chatId: chatId, promptId: promptId, decision: decision),
                                                     chatId: chatId)
         case Notifications.Action.cont:

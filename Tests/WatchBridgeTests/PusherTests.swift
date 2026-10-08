@@ -1,6 +1,7 @@
 import CryptoKit
 import XCTest
 @testable import WatchBridge
+import WatchProtocol
 
 final class PusherTests: XCTestCase {
     func decode(_ s: Substring) -> Data {
@@ -36,5 +37,33 @@ final class PusherTests: XCTestCase {
         XCTAssertEqual(aps["category"] as? String, "PROMPT")
         XCTAssertEqual((aps["alert"] as? [String: String])?["body"], "swift build")
         XCTAssertEqual(obj["promptId"] as? String, "p1")
+    }
+
+    func prompt(_ tool: String, always: Bool, kind: PendingPrompt.Kind = .permission) -> PendingPrompt {
+        PendingPrompt(id: "p1", chatId: "local_1", profileId: "account-1", chatTitle: "Fix bug", toolName: tool,
+                      summary: "swift build", source: .desktop, kind: kind, at: Date(), canAllowAlways: always)
+    }
+
+    func testPromptNoteCarriesIdsAndCategory() throws {
+        let n = PushNote.prompt(prompt("Edit", always: true), account: "Work")
+        let obj = try JSONSerialization.jsonObject(with: n.payload()) as! [String: Any]
+        XCTAssertEqual((obj["aps"] as? [String: Any])?["category"] as? String, "PROMPT_ALWAYS")
+        XCTAssertEqual(obj["chatId"] as? String, "local_1")
+        XCTAssertEqual(obj["promptId"] as? String, "p1")
+        XCTAssertEqual(obj["profileId"] as? String, "account-1")
+        XCTAssertEqual(n.title, "Work · Fix bug")
+        XCTAssertEqual(n.body, "Edit: swift build")
+        XCTAssertEqual(n.threadId, "local_1")
+        XCTAssertEqual(n.collapseId, "prompt-local_1")
+    }
+
+    func testPromptCategories() {
+        XCTAssertEqual(PushNote.prompt(prompt("Edit", always: false), account: "W").category, PushCategory.prompt)
+        XCTAssertEqual(PushNote.prompt(prompt("Edit", always: true), account: "W").category, PushCategory.promptAlways)
+        XCTAssertEqual(PushNote.prompt(prompt("Bash", always: false), account: "W").category, PushCategory.promptShell)
+        XCTAssertEqual(PushNote.prompt(prompt("Bash", always: true), account: "W").category, PushCategory.promptShellAlways)
+        let q = PushNote.prompt(prompt("AskUserQuestion", always: false, kind: .question), account: "W")
+        XCTAssertEqual(q.category, PushCategory.chat, "questions are answered on the Mac")
+        XCTAssertEqual(q.body, "swift build")
     }
 }
