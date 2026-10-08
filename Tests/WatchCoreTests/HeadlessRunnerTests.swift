@@ -16,6 +16,7 @@ final class HeadlessRunnerTests: XCTestCase {
         printf '%s\\n' "$@" > '\(argsFile.path)'
         printf '%s' "$CLAUDE_CODE_OAUTH_TOKEN" > '\(argsFile.path).token'
         printf '%s' "${CLAUDE_CODE_OAUTH_TOKEN+set}" > '\(argsFile.path).tokenset'
+        printf '%s' "${CLAUDE_CONFIG_DIR-unset}" > '\(argsFile.path).configdir'
         printf '%s' "$CLAUDE_WATCH_HEADLESS" > '\(argsFile.path).headless'
         exec sleep 30
         """.write(to: stub, atomically: true, encoding: .utf8)
@@ -106,6 +107,57 @@ final class HeadlessRunnerTests: XCTestCase {
                        "CLAUDE_CODE_OAUTH_TOKEN is left unset")
         XCTAssertEqual(try String(contentsOf: URL(fileURLWithPath: argsFile.path + ".headless"), encoding: .utf8), "1")
         r.stop(sessionId: s.id)
+    }
+
+    func testTerminalChatOfAnotherConfigDirRunsWithThatDir() throws {
+        let r = runner(token: "desktop-token")
+        var s = terminalSession(open: false)
+        s.profileId = "terminal:claude-1"
+        let other = Profile(id: "terminal:claude-1", name: "Terminal (claude-1)", dataDir: dir.appendingPathComponent(".claude-1"))
+        guard case .success = r.reply("go on", session: s, profile: other, activity: .idle) else {
+            return XCTFail("should start")
+        }
+        waitForFile(URL(fileURLWithPath: argsFile.path + ".headless"))
+        XCTAssertEqual(try String(contentsOf: URL(fileURLWithPath: argsFile.path + ".configdir"), encoding: .utf8),
+                       other.dataDir.path)
+        XCTAssertEqual(try String(contentsOf: URL(fileURLWithPath: argsFile.path + ".tokenset"), encoding: .utf8), "")
+        r.stop(sessionId: s.id)
+    }
+
+    func testReplyEnvironmentPerConfigDir() {
+        let home = URL(fileURLWithPath: "/Users/me")
+        let base = ["PATH": "/usr/bin", "CLAUDE_CONFIG_DIR": "/Users/me/.claude-9", "CLAUDE_CODE_ENTRYPOINT": "cli",
+                    "ANTHROPIC_API_KEY": "k"]
+        func env(_ s: SessionInfo, _ p: Profile, token: String? = nil) -> [String: String] {
+            HeadlessRunner.environment(base: base, session: s, profile: p, token: token, home: home)
+        }
+        var t = terminalSession(open: false)
+        // The default dir is whatever the app runs with: the inherited CLAUDE_CONFIG_DIR is kept.
+        let def = env(t, Profile(id: Profile.terminalId, name: "Terminal", dataDir: home.appendingPathComponent(".claude-9")))
+        XCTAssertEqual(def["CLAUDE_CONFIG_DIR"], "/Users/me/.claude-9")
+        XCTAssertNil(def["CLAUDE_CODE_ENTRYPOINT"]); XCTAssertNil(def["ANTHROPIC_API_KEY"]); XCTAssertNil(def["CLAUDE_CODE_OAUTH_TOKEN"])
+        XCTAssertEqual(def["PATH"], "/usr/bin")
+        t.profileId = "terminal:claude-1"
+        let one = env(t, Profile(id: "terminal:claude-1", name: "", dataDir: home.appendingPathComponent(".claude-1")))
+        XCTAssertEqual(one["CLAUDE_CONFIG_DIR"], "/Users/me/.claude-1")
+        // ~/.claude as a non-default dir runs with CLAUDE_CONFIG_DIR unset (its login is ~/.claude.json).
+        t.profileId = "terminal:claude"
+        XCTAssertNil(env(t, Profile(id: "terminal:claude", name: "", dataDir: home.appendingPathComponent(".claude")))["CLAUDE_CONFIG_DIR"])
+        // Desktop chats: token, inherited env otherwise untouched.
+        let desk = env(session(), profile, token: "tok")
+        XCTAssertEqual(desk["CLAUDE_CODE_OAUTH_TOKEN"], "tok")
+        XCTAssertEqual(desk["CLAUDE_CONFIG_DIR"], "/Users/me/.claude-9")
+    }
+
+    func testTerminalChatNeverRunsWithAnotherDirsProfile() {
+        var s = terminalSession(open: false)
+        s.profileId = "terminal:claude-1"
+        for p in [Profile.terminal, profile] {
+            guard case .failure = runner().reply("x", session: s, profile: p, activity: .idle) else {
+                return XCTFail("should refuse \(p.id)")
+            }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: argsFile.path), "nothing ran")
     }
 
     func testTerminalChatOpenInATerminalIsRefused() {

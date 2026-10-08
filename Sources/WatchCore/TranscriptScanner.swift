@@ -73,11 +73,14 @@ public final class TranscriptScanner {
     private var dirty = false
     private var lastSave: Date = .distantPast
     private let cacheURL: URL
-    private let projectsDir: URL
+    /// Every CLI config dir's `projects/` (the default one first). Changing it rebuilds the locator.
+    public var projectsDirs: [URL] {
+        didSet { if projectsDirs != oldValue { locatorBuiltAt = .distantPast } }
+    }
 
     public init(cacheURL: URL = Paths.scanCache, projectsDir: URL = Paths.projects) {
         self.cacheURL = cacheURL
-        self.projectsDir = projectsDir
+        self.projectsDirs = [projectsDir]
         if let data = try? Data(contentsOf: cacheURL),
            let c = try? JSONCoder.decoder.decode(ScanCache.self, from: data), c.version == 3 {
             cache = c
@@ -153,22 +156,42 @@ public final class TranscriptScanner {
     }
 
     private func rebuildLocator() {
+        locator = Self.locate(projectsDirs)
+    }
+
+    /// cliSessionId -> files (main first). A session held by more than one config dir (a copied chat)
+    /// takes all its files from the dir with the newest main transcript (the earlier dir on a tie),
+    /// the same rule `CLIConfigDir.merge` picks its terminal chat by.
+    static func locate(_ projectsDirs: [URL]) -> [String: [URL]] {
         let fm = FileManager.default
         var map: [String: [URL]] = [:]
-        for dir in (try? fm.contentsOfDirectory(at: projectsDir, includingPropertiesForKeys: nil)) ?? [] {
-            for entry in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] {
-                if entry.hasSuffix(".jsonl") {
-                    let id = String(entry.dropLast(6))
-                    map[id, default: []].insert(dir.appendingPathComponent(entry), at: 0)
-                } else if entry.count == 36 {
-                    let sub = dir.appendingPathComponent(entry).appendingPathComponent("subagents")
-                    for f in (try? fm.contentsOfDirectory(atPath: sub.path)) ?? [] where f.hasSuffix(".jsonl") {
-                        map[entry, default: []].append(sub.appendingPathComponent(f))
+        for projects in projectsDirs {
+            var own: [String: [URL]] = [:]
+            for dir in (try? fm.contentsOfDirectory(at: projects, includingPropertiesForKeys: nil)) ?? [] {
+                for entry in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] {
+                    if entry.hasSuffix(".jsonl") {
+                        let id = String(entry.dropLast(6))
+                        own[id, default: []].insert(dir.appendingPathComponent(entry), at: 0)
+                    } else if entry.count == 36 {
+                        let sub = dir.appendingPathComponent(entry).appendingPathComponent("subagents")
+                        for f in (try? fm.contentsOfDirectory(atPath: sub.path)) ?? [] where f.hasSuffix(".jsonl") {
+                            own[entry, default: []].append(sub.appendingPathComponent(f))
+                        }
                     }
                 }
             }
+            if map.isEmpty { map = own; continue }
+            for (id, files) in own {
+                if let old = map[id], mainMtime(old, id) >= mainMtime(files, id) { continue }
+                map[id] = files
+            }
         }
-        locator = map
+        return map
+    }
+
+    private static func mainMtime(_ files: [URL], _ id: String) -> Date {
+        guard let main = files.first(where: { $0.lastPathComponent == id + ".jsonl" }) else { return .distantPast }
+        return (try? FileManager.default.attributesOfItem(atPath: main.path)[.modificationDate] as? Date) ?? .distantPast
     }
 
     private func scanFile(_ url: URL, sessionId: String, isMain: Bool, horizon: Date) -> Bool {

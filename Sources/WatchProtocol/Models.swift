@@ -34,9 +34,11 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
 
     public var isDefault: Bool { id == "default" }
 
-    /// Claude Code sessions run with the `claude` CLI in a terminal (not a desktop window).
+    /// Claude Code sessions run with the `claude` CLI in a terminal (not a desktop window): "terminal"
+    /// for the default config dir, "terminal:<dir>" (e.g. "terminal:claude-1") for each other one.
     public static let terminalId = "terminal"
-    public var isTerminal: Bool { id == Self.terminalId }
+    public static func isTerminalId(_ id: String) -> Bool { id == terminalId || id.hasPrefix(terminalId + ":") }
+    public var isTerminal: Bool { Self.isTerminalId(id) }
 
     public init(id: String, name: String, dataDir: URL, launcherApp: URL? = nil) {
         self.id = id; self.name = name; self.dataDir = dataDir; self.launcherApp = launcherApp
@@ -113,7 +115,7 @@ public struct SessionInfo: Codable, Hashable, Sendable, Identifiable {
     public var isTerminal: Bool? = nil
     /// A terminal chat whose `claude` process is still running: reply and answer in the terminal.
     public var openInTerminal: Bool? = nil
-    public var isTerminalChat: Bool { isTerminal == true || profileId == Profile.terminalId }
+    public var isTerminalChat: Bool { isTerminal == true || Profile.isTerminalId(profileId) }
 
     public init(id: String, cliSessionId: String?, priorCliSessionIds: [String], profileId: String,
                 accountUuid: String, title: String, cwd: String, model: String?, permissionMode: String?,

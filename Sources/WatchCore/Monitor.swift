@@ -55,8 +55,8 @@ public final class Monitor {
     private var profilesAt: Date = .distantPast
     private var configMtime: Date?
     private let sessionIndex = SessionIndex()
-    private let terminalIndex: TerminalSessionIndex
-    private let cliAccountURL: URL
+    private let cliDirs: () -> [CLIConfigDir]
+    private var terminalIndexes: [String: TerminalSessionIndex] = [:]   // config dir path -> index
     private let attribution = Attribution()
     private let scanner = TranscriptScanner()
     private var usageCache: [String: (mtime: Date, samples: [UsageSample])] = [:]
@@ -70,10 +70,9 @@ public final class Monitor {
     /// count while their `claude` process runs.
     public private(set) var liveRunners: [String: Int32] = [:]
 
-    public init(ownEngine: Bool = true, terminalIndex: TerminalSessionIndex = TerminalSessionIndex(),
-                cliAccountURL: URL = Paths.claudeGlobalConfig) {
-        self.terminalIndex = terminalIndex
-        self.cliAccountURL = cliAccountURL
+    /// `cliDirs` finds the `claude` CLI config dirs whose terminal chats to show (read every poll).
+    public init(ownEngine: Bool = true, cliDirs: @escaping () -> [CLIConfigDir] = { CLIConfigDir.discover() }) {
+        self.cliDirs = cliDirs
         _config = Config.load()
         engine = RetryEngine(owner: ownEngine && EngineLock.acquire())
         engine.onEvent = { [weak self] item, msg in self?.onEvent?(.retry(item, msg)) }
@@ -158,7 +157,7 @@ public final class Monitor {
     }
 
     public func profile(id: String) -> Profile? {
-        id == Profile.terminalId ? .terminal : profiles.first { $0.id == id }
+        Profile.isTerminalId(id) ? CLIConfigDir.profile(id: id) : profiles.first { $0.id == id }
     }
 
     /// Queues a move; it runs once both windows are closed. Nil if the chat already has one pending.
@@ -258,13 +257,23 @@ public final class Monitor {
             if profileAccount[p.id] == nil { profileAccount[p.id] = copies.first?.accountUuid }
             for c in copies { candidates[c.id, default: []].append(c) }
         }
-        // Terminal chats: sessions of the `claude` CLI that no desktop record claims.
+        // Terminal chats: sessions of the `claude` CLI that no desktop record claims, from every CLI
+        // config dir, each filed under the account that dir is signed into.
         let desktopIds = Set(candidates.values.flatMap { $0.flatMap { c in c.priorCliSessionIds + [c.cliSessionId].compactMap { $0 } } })
-        let cliAccount = CLIAccount.read(from: cliAccountURL)
-        let terminalLive = terminalIndex.liveEntries()
-        let terminal = terminalIndex.sessions(excluding: desktopIds, live: terminalLive,
-                                              accountUuid: cliAccount?.identity ?? Profile.terminalId, now: now)
+        let dirs = cliDirs()
+        scanner.projectsDirs = dirs.map(\.projects)
+        terminalIndexes = terminalIndexes.filter { k, _ in dirs.contains { $0.dir.path == k } }
+        let perDir = dirs.map { d -> (profileId: String, sessions: [SessionInfo], live: [RegistryEntry]) in
+            let index = terminalIndexes[d.dir.path] ?? TerminalSessionIndex(d)
+            terminalIndexes[d.dir.path] = index
+            let live = index.liveEntries()
+            return (d.profileId, index.sessions(excluding: desktopIds, live: live, accountUuid: d.identity,
+                                                profileId: d.profileId, now: now), live)
+        }
+        let (terminal, terminalLive) = CLIConfigDir.merge(perDir)
         let terminalIds = Set(terminal.map(\.id))
+        let terminalDirs = dirs.filter { d in terminal.contains { $0.profileId == d.profileId } }
+        let tasksRoot = Dictionary(terminalDirs.map { ($0.profileId, $0.tasks) }, uniquingKeysWith: { a, _ in a })
         var terminalBusy = Set<String>(), terminalIdle = Set<String>()
         for e in terminalLive where terminalIds.contains(e.sessionId) {
             // Interactive processes win over a background `-p` run of the same chat.
@@ -273,7 +282,7 @@ public final class Monitor {
             if e.status == "busy" { terminalBusy.insert(e.sessionId) }
             if e.status == "idle", e.isInteractive { terminalIdle.insert(e.sessionId) }
         }
-        if !terminal.isEmpty { profileAccount[Profile.terminalId] = cliAccount?.identity ?? Profile.terminalId }
+        for d in terminalDirs { profileAccount[d.profileId] = d.identity }
 
         scanner.scan(sessions: candidates.values.map { $0[0] } + terminal, now: now)
         let dirOf = Dictionary(profiles.map { ($0.id, std($0.dataDir.path) + "/") }, uniquingKeysWith: { a, _ in a })
@@ -308,7 +317,7 @@ public final class Monitor {
         for s in all { byAccount[s.accountUuid, default: []].append(s) }
 
         // Profiles signed into the same account are shown as one account.
-        let groups = Self.accountGroups(profiles + (terminal.isEmpty ? [] : [Profile.terminal]), accounts: profileAccount)
+        let groups = Self.accountGroups(profiles + terminalDirs.map(\.profile), accounts: profileAccount)
 
         let moveList = moves.all()
         let arrivals = Self.arrivals(moveList)
@@ -368,7 +377,7 @@ public final class Monitor {
                 let b = scanner.buckets(for: s.id)
                 statuses.append(SessionStatus(
                     info: s, activity: activity, tail: tail,
-                    tasks: s.cliSessionId.map(TaskReader.tasks) ?? [],
+                    tasks: s.cliSessionId.map { TaskReader.tasks(cliSessionId: $0, root: tasksRoot[s.profileId] ?? Paths.tasks) } ?? [],
                     tokens5h: b.sum(from: now.addingTimeInterval(-5 * 3600)).weighted,
                     tokens7d: b.sum(from: now.addingTimeInterval(-7 * 86400)).weighted,
                     // Background work counts while the chat's process lives; otherwise only during a turn.

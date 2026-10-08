@@ -42,7 +42,10 @@ public final class HeadlessRunner: @unchecked Sendable {
         guard let cli = session.cliSessionId else {
             return .failure(RetryError(message: "This chat has no CLI session yet", permanent: true))
         }
-        // Terminal chats run as whoever `claude` is signed into; desktop chats need their account's token.
+        // Terminal chats run as whoever their config dir's `claude` is signed into; desktop chats need their account's token.
+        if session.isTerminalChat, !profile.isTerminal || profile.id != session.profileId {
+            return .failure(RetryError(message: "This terminal chat's CLI config dir wasn't found", permanent: true))
+        }
         let tok = session.isTerminalChat ? nil : token(profile.id)
         if tok == nil, !session.isTerminalChat {
             return .failure(RetryError(message: "No CLI token for \(profile.name). On the Mac run: claude-watch set-token \(profile.id)",
@@ -55,12 +58,8 @@ public final class HeadlessRunner: @unchecked Sendable {
         p.arguments = Self.arguments(cli: cli, text: text, permissionMode: session.permissionMode,
                                      promptTool: promptTool(session.id))
         if FileManager.default.fileExists(atPath: session.cwd) { p.currentDirectoryURL = URL(fileURLWithPath: session.cwd) }
-        var env = ProcessInfo.processInfo.environment.filter {
-            !$0.key.hasPrefix("CLAUDE_CODE_") && $0.key != "ANTHROPIC_API_KEY" && $0.key != "CLAUDECODE"
-        }
-        if let tok { env["CLAUDE_CODE_OAUTH_TOKEN"] = tok }
-        env[Self.headlessEnv] = "1"
-        p.environment = env
+        p.environment = Self.environment(base: ProcessInfo.processInfo.environment, session: session,
+                                         profile: profile, token: tok)
         let logURL = Paths.logs.appendingPathComponent("remote-\(session.id)-\(Int(Date().timeIntervalSince1970)).log")
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         if let h = try? FileHandle(forWritingTo: logURL) { p.standardOutput = h; p.standardError = h }
@@ -75,6 +74,22 @@ public final class HeadlessRunner: @unchecked Sendable {
         }
         lock.withLock { running[sid] = p }
         return .success(p.processIdentifier)
+    }
+
+    /// The run's environment: no inherited Claude Code session or API key, the account's token for desktop
+    /// chats, and for a terminal chat the `CLAUDE_CONFIG_DIR` of the dir it lives in (unset for `~/.claude`,
+    /// the default dir when the app has none), so it runs with that dir's own login and never another's.
+    static func environment(base: [String: String], session: SessionInfo, profile: Profile, token: String?,
+                            home: URL = Paths.home) -> [String: String] {
+        var env = base.filter {
+            !$0.key.hasPrefix("CLAUDE_CODE_") && $0.key != "ANTHROPIC_API_KEY" && $0.key != "CLAUDECODE"
+        }
+        if let token { env["CLAUDE_CODE_OAUTH_TOKEN"] = token }
+        if session.isTerminalChat, profile.id != Profile.terminalId {
+            env["CLAUDE_CONFIG_DIR"] = CLIConfigDir(dir: profile.dataDir, isDefault: false, home: home).env
+        }
+        env[Self.headlessEnv] = "1"
+        return env
     }
 
     static func arguments(cli: String, text: String, permissionMode: String?, promptTool: [String]?) -> [String] {
