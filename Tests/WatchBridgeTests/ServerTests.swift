@@ -245,6 +245,8 @@ final class ServerTests: XCTestCase {
         XCTAssertEqual(one.history.count, 1)
 
         try await send(.unwatchSystem)
+        try await send(.ping)   // the pong proves the server handled the unwatch before we publish
+        guard case .pong = try await next() else { return XCTFail("pong") }
         server.publish(system: Self.health())
         try await send(.ping)
         guard case .pong = try await next() else { return XCTFail("no reading after unwatch, just the pong") }
