@@ -21,6 +21,12 @@ final class FakeHandler: BridgeHandler {
     func messages(chatId: String, before: Int?, limit: Int) -> MessagesPage? {
         chatId == "local_1" ? MessagesPage(messages: [ChatMessage(id: "m", kind: .user, at: Date(), text: "hi")], before: nil) : nil
     }
+    var cursorsAsked: [String?] = []
+    func messages(chatId: String, cursor: String?, limit: Int) -> MessagesPage? {
+        guard chatId == "local_1" else { return nil }
+        cursorsAsked.append(cursor)
+        return MessagesPage(messages: [ChatMessage(id: "c", kind: .user, at: Date(), text: "by cursor")], before: nil, cursor: "o:1:2")
+    }
     func subscribe(chatId: String) -> (source: MessageSource, initial: [ChatMessage])? {
         guard chatId == "local_1" else { return nil }
         let initial = (0..<250).map { ChatMessage(id: "m\($0)", kind: .assistant, at: Date(), text: "\($0)") }
@@ -111,6 +117,13 @@ final class ServerTests: XCTestCase {
         XCTAssertEqual(try WireCoder.decoder.decode(MessagesPage.self, from: mdata).messages.first?.text, "hi")
         let (missing, _) = try await request("GET", "/v1/chats/nope/messages", token: token)
         XCTAssertEqual(missing, 404)
+        // Newer phones page by cursor: empty for the newest page, then the cursor they were given.
+        let (_, newest) = try await request("GET", "/v1/chats/local_1/messages?limit=10&cursor=", token: token)
+        XCTAssertEqual(try WireCoder.decoder.decode(MessagesPage.self, from: newest).cursor, "o:1:2")
+        _ = try await request("GET", "/v1/chats/local_1/messages?limit=10&cursor=o:1:2", token: token)
+        XCTAssertEqual(handler.cursorsAsked, [nil, "o:1:2"])
+        let (gone, _) = try await request("GET", "/v1/chats/nope/messages?cursor=", token: token)
+        XCTAssertEqual(gone, 404)
     }
 
     func testCommandsAreIdempotentAndCanBeRefused() async throws {
@@ -160,13 +173,20 @@ final class ServerTests: XCTestCase {
 
         let sub = try WireCoder.encoder.encode(WSClientMessage(type: .subscribe, chatId: "local_1"))
         try await ws.send(.string(String(decoding: sub, as: UTF8.self)))
-        guard case .messages(let id, let batch, let reset, let before) = try await next() else { return XCTFail("messages") }
+        guard case .messages(let id, let batch, let reset, let before, nil) = try await next() else { return XCTFail("messages") }
         XCTAssertEqual(id, "local_1"); XCTAssertTrue(reset)
         XCTAssertEqual(batch.count, BridgeServer.initialBatch)
         XCTAssertEqual(before, 50)
 
+        // A phone that pages by cursor gets the newest messages with a cursor instead of an index.
+        let subCursor = try WireCoder.encoder.encode(WSClientMessage(type: .subscribe, chatId: "local_1", cursors: true))
+        try await ws.send(.string(String(decoding: subCursor, as: UTF8.self)))
+        guard case .messages(_, let batch2, true, nil, let cursor) = try await next() else { return XCTFail("cursor messages") }
+        XCTAssertEqual(batch2.count, BridgeServer.initialBatch)
+        XCTAssertEqual(cursor, "50")
+
         handler.source.queued = [ChatMessage(id: "new", kind: .assistant, at: Date(), text: "fresh")]
-        guard case .messages(_, let more, false, _) = try await next() else { return XCTFail("update") }
+        guard case .messages(_, let more, false, _, _) = try await next() else { return XCTFail("update") }
         XCTAssertEqual(more.map(\.id), ["new"])
 
         let (_, d) = try await request("POST", "/v1/chats/local_1/stop", token: token, body: PlainCommand())

@@ -37,9 +37,30 @@ public struct ChatMessage: Codable, Hashable, Sendable, Identifiable {
 
 public struct MessagesPage: Codable, Sendable {
     public var messages: [ChatMessage]
-    /// Cursor for the previous page (index of the first message here), nil at the start of the chat.
+    /// Index cursor for the previous page (index of the first message here), nil at the start of the chat
+    /// or when the page carries `cursor` instead.
     public var before: Int?
-    public init(messages: [ChatMessage], before: Int?) { self.messages = messages; self.before = before }
+    /// Opaque cursor for the previous page (pass it back as `cursor`), from Macs that read transcripts from
+    /// their end; nil at the start of the chat, and from older Macs (use `before`).
+    public var cursor: String?
+    public init(messages: [ChatMessage], before: Int?, cursor: String? = nil) {
+        self.messages = messages; self.before = before; self.cursor = cursor
+    }
+
+    /// Where the previous page starts, whichever kind of cursor this page has.
+    public var older: OlderCursor? { OlderCursor(cursor: cursor, before: before) }
+}
+
+/// How to ask for the page before the messages you have: an opaque cursor (Macs that read transcripts
+/// from their end) or a message index (older Macs, and the only kind older phones know).
+public enum OlderCursor: Hashable, Sendable {
+    case token(String)
+    case index(Int)
+
+    /// The cursor when there is one, else the index; nil when neither (the start of the chat).
+    public init?(cursor: String?, before: Int?) {
+        if let cursor { self = .token(cursor) } else if let before { self = .index(before) } else { return nil }
+    }
 }
 
 // MARK: - Prompts
@@ -285,14 +306,20 @@ public struct WSClientMessage: Codable, Sendable, Equatable {
     public enum Kind: String, Codable, Sendable { case subscribe, unsubscribe, ping, watchSystem, unwatchSystem }
     public var type: Kind
     public var chatId: String?
-    public init(type: Kind, chatId: String? = nil) { self.type = type; self.chatId = chatId }
+    /// On `subscribe`: the phone pages with opaque cursors, so the Mac may send the newest messages with a
+    /// `cursor` instead of an index (`before`), which needs only the end of the transcript. Older phones leave it out.
+    public var cursors: Bool?
+    public init(type: Kind, chatId: String? = nil, cursors: Bool? = nil) {
+        self.type = type; self.chatId = chatId; self.cursors = cursors
+    }
 }
 
 public enum WSServerMessage: Sendable {
     case snapshot(Snapshot)
     /// New or updated messages of the subscribed chat (upsert by id). `reset` = replace what you have
-    /// (the first batch after subscribing); `before` is then the cursor for older pages.
-    case messages(chatId: String, messages: [ChatMessage], reset: Bool, before: Int?)
+    /// (the first batch after subscribing); `cursor` (phones that subscribed with `cursors`) or `before`
+    /// is then the cursor for older pages, as in `MessagesPage`.
+    case messages(chatId: String, messages: [ChatMessage], reset: Bool, before: Int?, cursor: String?)
     /// What the subscribed chat is doing (full detail), sent after subscribing and whenever it changes.
     /// Phones that don't know it skip it.
     case work(chatId: String, work: LiveWork)
@@ -304,7 +331,7 @@ public enum WSServerMessage: Sendable {
 }
 
 extension WSServerMessage: Codable {
-    enum CodingKeys: String, CodingKey { case type, snapshot, chatId, messages, reset, before, work, job, system }
+    enum CodingKeys: String, CodingKey { case type, snapshot, chatId, messages, reset, before, cursor, work, job, system }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -314,7 +341,8 @@ extension WSServerMessage: Codable {
             self = .messages(chatId: try c.decode(String.self, forKey: .chatId),
                              messages: try c.decode([ChatMessage].self, forKey: .messages),
                              reset: try c.decodeIfPresent(Bool.self, forKey: .reset) ?? false,
-                             before: try c.decodeIfPresent(Int.self, forKey: .before))
+                             before: try c.decodeIfPresent(Int.self, forKey: .before),
+                             cursor: try c.decodeIfPresent(String.self, forKey: .cursor))
         case "work": self = .work(chatId: try c.decode(String.self, forKey: .chatId), work: try c.decode(LiveWork.self, forKey: .work))
         case "job": self = .job(try c.decode(Job.self, forKey: .job))
         case "system": self = .system(try c.decode(SystemHealth.self, forKey: .system))
@@ -327,10 +355,11 @@ extension WSServerMessage: Codable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .snapshot(let s): try c.encode("snapshot", forKey: .type); try c.encode(s, forKey: .snapshot)
-        case .messages(let id, let m, let reset, let before):
+        case .messages(let id, let m, let reset, let before, let cursor):
             try c.encode("messages", forKey: .type); try c.encode(id, forKey: .chatId)
             try c.encode(m, forKey: .messages); try c.encode(reset, forKey: .reset)
             try c.encodeIfPresent(before, forKey: .before)
+            try c.encodeIfPresent(cursor, forKey: .cursor)
         case .work(let id, let w):
             try c.encode("work", forKey: .type); try c.encode(id, forKey: .chatId); try c.encode(w, forKey: .work)
         case .job(let j): try c.encode("job", forKey: .type); try c.encode(j, forKey: .job)

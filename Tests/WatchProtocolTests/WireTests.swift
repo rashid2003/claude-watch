@@ -63,13 +63,15 @@ final class WireTests: XCTestCase {
     func testServerMessages() throws {
         let job = Job(id: "j1", requestId: "r1", command: "reply", target: "local_1", status: .done, at: t)
         let msg = ChatMessage(id: "u1", kind: .tool, at: t, text: "Ran swift build", toolName: "Bash", toolOK: true)
-        for m in [WSServerMessage.snapshot(sampleSnapshot()), .messages(chatId: "local_1", messages: [msg], reset: true, before: 7),
+        for m in [WSServerMessage.snapshot(sampleSnapshot()), .messages(chatId: "local_1", messages: [msg], reset: true, before: 7, cursor: nil),
+                  .messages(chatId: "local_1", messages: [msg], reset: true, before: nil, cursor: "o:12:34"),
                   .job(job), .pong] {
             let back = try roundTrip(m)
             switch (m, back) {
             case (.snapshot, .snapshot), (.job, .job), (.pong, .pong): break
-            case (.messages(_, let a, let r1, let c1), .messages(let id, let b, let r2, let c2)):
+            case (.messages(_, let a, let r1, let c1, let k1), .messages(let id, let b, let r2, let c2, let k2)):
                 XCTAssertEqual(id, "local_1"); XCTAssertEqual(a, b); XCTAssertEqual(r1, r2); XCTAssertEqual(c1, c2)
+                XCTAssertEqual(k1, k2)
             default: XCTFail("type changed: \(m) -> \(back)")
             }
         }
@@ -84,6 +86,26 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(j.status, .failed)
         XCTAssertEqual(j.reason, "No such chat")
         XCTAssertEqual(String(decoding: try WireCoder.encoder.encode(WSServerMessage.job(j)), as: UTF8.self), json)
+    }
+
+    /// Old and new phones and Macs read each other's paging fields.
+    func testPagingCursorsStayCompatible() throws {
+        // An older Mac's messages / page: no `cursor`, so a newer phone falls back to `before`.
+        let oldMac = #"{"type":"messages","chatId":"c","messages":[],"reset":true,"before":12}"#
+        guard case .messages(_, _, _, let before, let cursor) = try WireCoder.decoder.decode(WSServerMessage.self, from: Data(oldMac.utf8))
+        else { return XCTFail("messages") }
+        XCTAssertEqual(before, 12); XCTAssertNil(cursor)
+        XCTAssertEqual(OlderCursor(cursor: cursor, before: before), .index(12))
+        let page = try WireCoder.decoder.decode(MessagesPage.self, from: Data(#"{"messages":[],"before":3}"#.utf8))
+        XCTAssertEqual(page.older, .index(3))
+        XCTAssertNil(try WireCoder.decoder.decode(MessagesPage.self, from: Data(#"{"messages":[]}"#.utf8)).older)
+        // A newer Mac's page carries the cursor (an older phone ignores it; it never asks for one).
+        let newPage = try WireCoder.encoder.encode(MessagesPage(messages: [], before: nil, cursor: "o:5:9"))
+        XCTAssertEqual(try WireCoder.decoder.decode(MessagesPage.self, from: newPage).older, .token("o:5:9"))
+        // An older phone's subscribe has no `cursors`; a newer one's still decodes (older Macs skip the key).
+        XCTAssertNil(try WireCoder.decoder.decode(WSClientMessage.self, from: Data(#"{"type":"subscribe","chatId":"c"}"#.utf8)).cursors)
+        let sub = WSClientMessage(type: .subscribe, chatId: "c", cursors: true)
+        XCTAssertEqual(try roundTrip(sub), sub)
     }
 
     func testClientMessageAndPairing() throws {

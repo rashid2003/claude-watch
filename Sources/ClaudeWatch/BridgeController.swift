@@ -33,7 +33,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     private var powerObservers: [NSObjectProtocol] = []
     /// Called on the main queue with every chat's draft when one changes (Mac chat list).
     var onDrafts: (([String: ChatDraft]) -> Void)?
-    /// Parsed transcripts, so reopening a chat on the phone only reads what's new.
+    /// Transcripts read from their end, so opening a chat on the phone reads only its newest lines and reopening only what is new.
     private let transcripts = TranscriptCache()
     private var lastActivity: [String: SessionStatus.Activity] = [:]
     private var knownPrompts = Set<String>()
@@ -323,10 +323,20 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         transcript(chatId).map { transcripts.page($0, before: before, limit: limit) }
     }
 
+    func messages(chatId: String, cursor: String?, limit: Int) -> MessagesPage? {
+        transcript(chatId).map { transcripts.page($0, cursor: cursor, limit: limit) }
+    }
+
     func subscribe(chatId: String) -> (source: MessageSource, initial: [ChatMessage])? {
         guard let url = transcript(chatId) else { return nil }
         let (all, feed) = transcripts.open(url)
         return (feed, all)
+    }
+
+    func subscribe(chatId: String, limit: Int) -> (source: MessageSource, page: MessagesPage)? {
+        guard let url = transcript(chatId) else { return nil }
+        let (page, feed) = transcripts.open(url, limit: limit)
+        return (feed, page)
     }
 
     func folders(profileId: String) -> [FolderSuggestion] {

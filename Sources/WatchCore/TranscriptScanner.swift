@@ -232,10 +232,10 @@ public final class TranscriptScanner {
         if isUser && line.count > 262_144 {
             // Huge tool results: skip full parse, classify cheaply.
             guard st.isMain else { return }
-            st.tail.last = line.range(of: Data("\"tool_result\"".utf8)) != nil ? .toolResult : .userPrompt
+            st.tail.last = line.fastRange(of: Data("\"tool_result\"".utf8)) != nil ? .toolResult : .userPrompt
             if let ts = Self.timestamp(inRaw: line) { st.tail.lastAt = ts }
             if let id = Self.toolUseId(inRaw: line) {
-                st.work?.result(id: id, isError: line.range(of: Data("\"is_error\":true".utf8)) != nil, at: st.tail.lastAt ?? Date())
+                st.work?.result(id: id, isError: line.fastRange(of: Data("\"is_error\":true".utf8)) != nil, at: st.tail.lastAt ?? Date())
             }
             return
         }
@@ -300,14 +300,14 @@ public final class TranscriptScanner {
     }
 
     static func toolUseId(inRaw line: Data) -> String? {
-        guard let r = line.range(of: Data("\"tool_use_id\":\"".utf8)) else { return nil }
+        guard let r = line.fastRange(of: Data("\"tool_use_id\":\"".utf8)) else { return nil }
         let rest = line[r.upperBound...].prefix(80)
         guard let end = rest.firstIndex(of: UInt8(ascii: "\"")) else { return nil }
         return String(decoding: rest[..<end], as: UTF8.self)
     }
 
     static func timestamp(inRaw line: Data) -> Date? {
-        guard let r = line.range(of: Data("\"timestamp\":\"".utf8)) else { return nil }
+        guard let r = line.fastRange(of: Data("\"timestamp\":\"".utf8)) else { return nil }
         let bytes = line[r.upperBound...].prefix(40)
         guard let end = bytes.firstIndex(of: UInt8(ascii: "\"")) else { return nil }
         return parseISO(String(decoding: bytes[..<end], as: UTF8.self))
@@ -335,5 +335,34 @@ public final class TranscriptScanner {
             while i < u.count, u[i] >= 48, u[i] <= 57 { frac += Double(u[i] - 48) * scale; scale /= 10; i += 1 }
         }
         return Date(timeIntervalSince1970: Double(timegm(&t)) + frac)
+    }
+}
+
+extension Data {
+    /// Calls `body` with each non-empty newline-separated line (a copy) and its offset from `startIndex`,
+    /// like `split(separator: 0x0A)` but with memchr: splitting byte by byte dominated reading big transcripts.
+    func forEachLine(_ body: (Data, Int) -> Void) {
+        withUnsafeBytes { (buf: UnsafeRawBufferPointer) in
+            guard let base = buf.baseAddress else { return }
+            var start = 0
+            while start < buf.count {
+                let rest = buf.count - start
+                let nl = memchr(base + start, 0x0A, rest).map { base.distance(to: UnsafeRawPointer($0)) } ?? buf.count
+                if nl > start { body(Data(bytes: base + start, count: nl - start), start) }
+                start = nl + 1
+            }
+        }
+    }
+
+    /// `range(of:)` through memmem: far faster on huge lines (tool results of several MB scanned whole).
+    func fastRange(of needle: Data) -> Range<Index>? {
+        guard !needle.isEmpty, count >= needle.count else { return nil }
+        return withUnsafeBytes { hay -> Range<Index>? in
+            needle.withUnsafeBytes { n -> Range<Index>? in
+                guard let base = hay.baseAddress, let p = memmem(base, hay.count, n.baseAddress, n.count) else { return nil }
+                let off = base.distance(to: UnsafeRawPointer(p))
+                return (startIndex + off)..<(startIndex + off + needle.count)
+            }
+        }
     }
 }
