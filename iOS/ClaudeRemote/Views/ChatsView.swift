@@ -85,6 +85,9 @@ struct ChatsView: View {
                     .buttonStyle(.row)
                     .foregroundStyle(.primary)
                     .transition(.opacity.combined(with: .move(edge: .top)))
+                    // The lazy stack keys rows by id across sections; a chat moving from working to recent
+                    // could otherwise keep showing its old row.
+                    .id("\(title)/\(s.id)")
             }
         }
     }

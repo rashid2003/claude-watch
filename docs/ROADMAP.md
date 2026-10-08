@@ -32,8 +32,10 @@ Last updated: 2026-10-08.
 | 🧪 | **Drafts follow you** | `feat/draft-sync` | Phone ↔ Mac via `POST /v1/chats/{id}/draft` and `Snapshot.drafts`. The desktop composer is read (2 s, only for chats a phone has open), never written |
 | 🧪 | **Live Activity shows "Mac offline"** | `feat/live-activity-offline` | 12-min `stale-date` and 5-min heartbeats (priority 5). The phone marks it offline after 30 s without the Mac in the foreground |
 | 🧪 | Session Watch Next | `next` | Side-by-side build: shares the engine lock, skips keychain reads and the login item |
+| 🧪 | Chats list rows follow their section | `next` | A chat moving from working to recent could keep its old row (lazy stack keyed rows by id across sections) |
+| 🧪 | Scan cache v3 | `next` | Old caches rescan once so live work is right from the start (~1–2 min on first launch) |
 | 🧪 | Revokes are logged | `next` | `remote-log.jsonl` gets `revoke … by mac/phone`. A device list emptied at 06:37 today had no trace |
-| 🧪 | **See what a chat is doing, like the Claude app** | `feat/live-work` | `WorkTracker` follows running tool calls, subagents (their own `subagents/agent-*.jsonl` files) and background shells/monitors. Phone: "live" panel under the tasks with timers and each subagent's current step; chats list shows `↳ 2 agents · Bash: swift test`. New WS message `.work`, `SessionStatus.work` brief |
+| 🧪 | **See what a chat is doing, like the Claude app** | `feat/live-work` | `WorkTracker` follows running tool calls, subagents (their own `subagents/agent-*.jsonl` files) and background shells/monitors; ends them on results, task notifications (user entries, mid-turn `queued_command` and `task_status` attachments), TaskStop or interrupts. Phone: "live" panel under the tasks with timers and each subagent's current step; chats list shows `↳ 2 agents · Bash: swift test`. Checked in the Simulator against Session Watch Next |
 
 ## Needs a real device
 
@@ -41,6 +43,7 @@ Last updated: 2026-10-08.
 - Live Activity offline look in every Dynamic Island size; no false "offline" from late low-priority pushes
 - Desktop → phone drafts: whether the Mac can tell which chat a Claude window shows (URL id or title). If it can't, desktop drafts never appear
 - Accessibility for Session Watch Next is a separate permission (its own bundle id)
+- Relay mode in the iPhone **Simulator**: the in-app `NWListener` never accepts (`SO_NECP_LISTENUUID failed`), so the Simulator shows "mac unreachable" over the relay. Use direct mode there (debug builds pair with `SIMCTL_CHILD_SW_PAIR='<QR JSON>'`). Real phones are unaffected
 
 ## Later
 
