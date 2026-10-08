@@ -9,7 +9,7 @@ Last updated: 2026-10-09.
 
 1. Each feature is built on its own `feat/*` branch, then merged into **`next`** (worktree `~/Development/claude-watch-next`).
 2. **Session Watch Next** (`VARIANT=next scripts/release-mac.sh`) runs next to the installed app: bundle `dev.lajward.SessionWatch.next`, data in `claude-watch-next`, port 7434, its own relay room. It's tested with the iPhone Simulator, so the installed Mac app and the TestFlight build on the phone stay untouched.
-3. When `next` holds up, it's merged to `main`, then Session Watch and TestFlight are released from it.
+3. When a task is done, it's merged to `main`, then Session Watch (Mac) and the TestFlight iPhone app are released from it. Session Watch Next is Mac-only: there is no iPhone Next app.
 
 ## Shipped
 
@@ -40,7 +40,6 @@ Last updated: 2026-10-09.
 | 🧪 | **Live Activity goes offline when the Mac sleeps or quits** | `feat/devices-offline` | On `willSleep` and on quit the Mac sends one priority-10 update with `offline: "sleep"/"quit"`, `connected: false` and a stale date of now (so older widget builds show offline too), waiting up to 2 s. Nothing more until `didWake`, when the next snapshot goes out at once. Says "Mac asleep" / "Mac app quit". A push that never left the Mac is retried on the next snapshot |
 | 🧪 | **Mac release script bumps the version** | `feat/release-tooling` | `scripts/MAC_VERSION` holds the last release. Default bumps the patch; `BUMP=minor\|major\|none` or `VERSION=x.y.z`. Written only after notarization succeeds, never for `VARIANT=next`. `DRY_RUN=1` prints the version and stops. No commits or tags |
 | 🧪 | **Relay metrics without content** | `feat/release-tooling` | Streams, bytes each way, errors by kind, auth failures, active Mac rooms; per deployment and in total. Rooms batch counters for 5 s into a `RelayMetrics` Durable Object. `GET /v1/metrics` with the `METRICS_TOKEN` secret. No payloads, ids, keys or IPs. Not deployed yet |
-| 🧪 | **Session Watch Next for iPhone** | `feat/release-tooling` | `VARIANT=next iOS/scripts/release.sh` (`iOS/Config/Next.xcconfig`): `dev.lajward.SessionWatch.next` + `.next.Widgets`, "Session Watch Next", own keychain groups, manual pairing port 7434. Compiles for the Simulator; needs its App Store Connect record before the first upload |
 
 ## Needs a real device
 
@@ -56,12 +55,10 @@ Last updated: 2026-10-09.
 ## Needs you
 
 - **Relay metrics**: after `feat/release-tooling` is merged and the relay deployed, set the token once: `cd relay && npx wrangler secret put METRICS_TOKEN` (a long random value, e.g. `openssl rand -hex 24`). Until then `/v1/metrics` answers 404. Read: `curl -H "Authorization: Bearer <token>" https://relay.sessionwatch.lajward.co/v1/metrics`
-- **iPhone Next app**: in App Store Connect create the app "Session Watch Next", bundle id `dev.lajward.SessionWatch.next`; register the App IDs `dev.lajward.SessionWatch.next` (Push Notifications) and `dev.lajward.SessionWatch.next.Widgets` on developer.apple.com if the first archive's `-allowProvisioningUpdates` doesn't. Then `VARIANT=next iOS/scripts/release.sh`
 - **Mac release**: commit `scripts/MAC_VERSION` after a release ("Release the Mac app as x.y.z"); the script doesn't
 
 ## Later
 
-- Push notifications for the Next pair (the Mac's Next build has no APNs key, and the phone Next app would need its own topic `dev.lajward.SessionWatch.next`)
 
 ## Decisions
 
