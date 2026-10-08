@@ -30,6 +30,23 @@ Then run the end-to-end tests from the repo root:
 RELAY_URL=ws://127.0.0.1:8787 swift test --filter RelayLiveTests
 ```
 
+## Metrics
+
+The relay counts what it does, never what it carries: no payloads, room ids, secrets, stream ids or IPs.
+
+- Counted: Mac connects and replacements, auth failures, streams opened / answered / closed, frames and ciphertext bytes each way, and errors by kind (`err_mac_offline`, `err_rate_limited`, `err_too_many_streams`, `err_no_such_stream`, `err_stream_taken`, `err_attach_timeout`, `err_frame_too_large`, `err_mac_not_ready`, `err_socket_error`). Gauges: active Mac rooms and open streams.
+- Each `MacRoom` adds to in-memory counters and sends them in one batch 5 s later (its alarm) to a single `RelayMetrics` Durable Object, so relaying a frame costs two additions. Counters are kept in total and per deployment (Worker version id, last 10). Best effort: a batch can be lost if a room is evicted before it flushes.
+- Workers Analytics Engine wasn't used: reading it needs a Cloudflare API token and the SQL API, and it can't hold a gauge like active rooms.
+
+Turn it on once with a secret (until then `/v1/metrics` answers 404):
+
+```bash
+npx wrangler secret put METRICS_TOKEN      # paste a long random value, e.g. from: openssl rand -hex 24
+curl -H "Authorization: Bearer <token>" https://relay.sessionwatch.lajward.co/v1/metrics
+```
+
+Locally, put `METRICS_TOKEN=…` in `relay/.dev.vars` (gitignored), run `wrangler dev` on port 8788 and `npm run smoke:metrics`.
+
 ## Limits
 
 - 32 streams per Mac.

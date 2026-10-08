@@ -97,6 +97,7 @@ The phone stores it in `Credentials.relay` and pairs by:
   - macId must match `^[a-z2-7]{26}$`.
 - Control socket keepalive: ping every 30 s, sent as a `{"t":"ping"}` text frame from the Mac.
 - No storage beyond `secretHash`. No logging of payloads.
+  - Added 2026-10-09: anonymous counters (`relay/src/metrics.ts`, `GET /v1/metrics` behind the `METRICS_TOKEN` secret). A room also keeps `macVersion`, the deployment its Mac was counted under for the active-room gauge. Still no payloads, ids, keys or IPs.
 
 ## Out of scope (later)
 
