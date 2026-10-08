@@ -89,9 +89,9 @@ public enum PushCategory {
 
     public static var prompts: [String] { [prompt, promptAlways, promptShell, promptShellAlways] }
 
-    /// Questions are answered on the Mac, so they get the plain chat actions.
+    /// Questions and view-only prompts are answered on the Mac, so they get the plain chat actions.
     public static func of(_ p: PendingPrompt) -> String {
-        guard p.kind == .permission else { return chat }
+        guard p.kind == .permission, p.viewOnly != true else { return chat }
         switch (p.toolName == "Bash", p.canAllowAlways) {
         case (false, false): return prompt
         case (false, true): return promptAlways
