@@ -130,13 +130,14 @@ final class TranscriptHistory {
             let from = lo > step ? lo - step : 0
             guard (try? h.seek(toOffset: from)) != nil,
                   let got = try? h.read(upToCount: Int(lo - from)), got.count == Int(lo - from) else { return (end, Data()) }
-            data = got + data
+            data = data.isEmpty ? got : got + data
             lo = from
             if lo == 0 { break }
-            // Bytes up to the first newline belong to a line that starts further back.
-            if let nl = data.firstIndex(of: 0x0A), data.index(after: nl) < data.endIndex {
-                let skip = data.distance(from: data.startIndex, to: nl) + 1
-                return (lo + UInt64(skip), Data(data.dropFirst(skip)))
+            // Bytes up to the first newline belong to a line that starts further back. Earlier reads had
+            // no newline but maybe their last byte, so only the new bytes need searching.
+            if let nl = got.withUnsafeBytes({ b in b.baseAddress.flatMap { memchr($0, 0x0A, b.count) }.map { b.baseAddress!.distance(to: UnsafeRawPointer($0)) } }),
+               nl + 1 < data.count {
+                return (lo + UInt64(nl + 1), data.subdata(in: data.startIndex + nl + 1 ..< data.endIndex))
             }
             step *= 2
         }
@@ -147,9 +148,9 @@ final class TranscriptHistory {
     static func parse(_ data: Data, at start: UInt64, trackWork: Bool) -> ChatParser {
         var p = ChatParser()
         p.trackWork = trackWork
-        for line in data.split(separator: 0x0A) {
-            p.lineAt = start + UInt64(data.distance(from: data.startIndex, to: line.startIndex))
-            _ = p.consume(Data(line))
+        data.forEachLine { line, at in
+            p.lineAt = start + UInt64(at)
+            _ = p.consume(line)
         }
         return p
     }

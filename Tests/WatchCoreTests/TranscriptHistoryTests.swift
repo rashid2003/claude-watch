@@ -226,6 +226,28 @@ final class TranscriptHistoryTests: XCTestCase {
         }
     }
 
+    func testFastRangeMatchesRangeOnSlices() {
+        let data = Data("xx{\"is_error\":true,\"tool_use_id\":\"t9\"}yy\"is_error\":true".utf8)
+        let slice = data[5...]
+        for needle in ["\"is_error\":true", "\"tool_use_id\":\"", "yy", "nope", "x"] {
+            let n = Data(needle.utf8)
+            XCTAssertEqual(slice.fastRange(of: n), slice.range(of: n), needle)
+            XCTAssertEqual(data.fastRange(of: n), data.range(of: n), needle)
+        }
+        XCTAssertNil(Data().fastRange(of: Data("a".utf8)))
+    }
+
+    func testForEachLineMatchesSplit() {
+        let data = Data("\n\nab\ncd\n\nefg\nh".utf8)
+        for d in [data, data[3...], data[..<12], Data(), Data("\n".utf8)] {
+            var got: [(Data, Int)] = []
+            d.forEachLine { got.append(($0, $1)) }
+            let want = d.split(separator: 0x0A)
+            XCTAssertEqual(got.map(\.0), want.map { Data($0) })
+            XCTAssertEqual(got.map(\.1), want.map { $0.startIndex - d.startIndex })
+        }
+    }
+
     func testEmptyAndMissingFiles() throws {
         let cache = TranscriptCache()
         let empty = try write(Data())

@@ -37,9 +37,9 @@ public final class ChatFeed {
         guard let lastNL = data.lastIndex(of: 0x0A) else { return [] }
         var touched: [Int] = []
         var seen = Set<Int>()
-        for line in data[..<lastNL].split(separator: 0x0A) {
-            parser.lineAt = offset + UInt64(line.startIndex - data.startIndex)
-            for i in parser.consume(Data(line)) where seen.insert(i).inserted { touched.append(i) }
+        data[..<lastNL].forEachLine { line, at in
+            parser.lineAt = offset + UInt64(at)
+            for i in parser.consume(line) where seen.insert(i).inserted { touched.append(i) }
         }
         offset += UInt64(lastNL - data.startIndex + 1)
         return touched.sorted().map { parser.messages[$0] }
@@ -208,7 +208,7 @@ struct ChatParser {
 
     private mutating func rawToolResult(_ line: Data) -> [Int] {
         guard let id = TranscriptScanner.toolUseId(inRaw: line) else { return [] }
-        let isError = line.range(of: Data("\"is_error\":true".utf8)) != nil
+        let isError = line.fastRange(of: Data("\"is_error\":true".utf8)) != nil
         if trackWork { work.result(id: id, isError: isError, at: TranscriptScanner.timestamp(inRaw: line) ?? Date()) }
         return resolve(id, ok: !isError).map { [$0] } ?? []
     }
