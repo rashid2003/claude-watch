@@ -74,6 +74,31 @@ struct RemoteCommand: Sendable {
         return .init("/v1/moves/\(seg(id))/cancel", b, requestId: b.requestId, key: Keys.move(id), label: "Cancel move")
     }
 
+    static func quitApp(_ app: AppUsage) -> RemoteCommand {
+        let b = QuitAppBody(appId: app.id)
+        return .init("/v1/system/apps/quit", b, requestId: b.requestId, key: Keys.app(app.id), label: "Quit \(app.name)")
+    }
+
+    static func kill(_ app: AppUsage) -> RemoteCommand {
+        let b = KillBody(pid: app.mainPid)
+        return .init("/v1/system/processes/kill", b, requestId: b.requestId, key: Keys.app(app.id), label: "Kill \(app.name)")
+    }
+
+    static func closeIdleClaude() -> RemoteCommand {
+        let b = PlainCommand()
+        return .init("/v1/system/claude/close-idle", b, requestId: b.requestId, key: Keys.closeIdle, label: "Close idle Claude")
+    }
+
+    static func cleanDisk(_ ids: [String]) -> RemoteCommand {
+        let b = CleanBody(targets: ids)
+        return .init("/v1/system/disk/clean", b, requestId: b.requestId, key: Keys.clean, label: "Free disk")
+    }
+
+    static func setAutoAct(_ on: Bool) -> RemoteCommand {
+        let b = AutoActBody(enabled: on)
+        return .init("/v1/system/auto", b, requestId: b.requestId, key: Keys.autoAct, label: "Auto-act")
+    }
+
     static func restartMoves() -> RemoteCommand {
         let b = PlainCommand()
         return .init("/v1/moves/restart", b, requestId: b.requestId, key: Keys.restart, label: "Restart windows")
@@ -91,4 +116,8 @@ enum Keys {
     static func move(_ id: String) -> String { "move:" + id }
     static let newChat = "newchat"
     static let restart = "restart"
+    static func app(_ id: String) -> String { "app:" + id }
+    static let closeIdle = "closeidle"
+    static let clean = "clean"
+    static let autoAct = "autoact"
 }

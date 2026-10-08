@@ -15,6 +15,11 @@ public enum BridgeCommand: Sendable {
     case undoMove(id: String)
     case cancelMove(id: String)
     case restartMoves
+    case quitApp(appId: String)
+    case killProcess(pid: Int32)
+    case closeIdleClaude
+    case cleanDisk(targets: [String])
+    case setAutoAct(enabled: Bool)
 
     public var name: String {
         switch self {
@@ -29,6 +34,11 @@ public enum BridgeCommand: Sendable {
         case .undoMove: "undo-move"
         case .cancelMove: "cancel-move"
         case .restartMoves: "restart-windows"
+        case .quitApp: "quit-app"
+        case .killProcess: "kill"
+        case .closeIdleClaude: "close-idle-claude"
+        case .cleanDisk: "clean-disk"
+        case .setAutoAct: "auto-act"
         }
     }
 
@@ -39,7 +49,11 @@ public enum BridgeCommand: Sendable {
         case .retry(let i), .cancelRetry(let i): i
         case .move(let s, _): s
         case .undoMove(let i), .cancelMove(let i): i
-        case .restartMoves: nil
+        case .restartMoves, .closeIdleClaude: nil
+        case .quitApp(let a): a
+        case .killProcess(let pid): "\(pid)"
+        case .cleanDisk(let t): t.joined(separator: ",")
+        case .setAutoAct(let on): on ? "on" : "off"
         }
     }
 }
@@ -59,6 +73,8 @@ public protocol BridgeHandler: AnyObject {
     func subscribe(chatId: String) -> (source: MessageSource, initial: [ChatMessage])?
     func folders(profileId: String) -> [FolderSuggestion]
     func usage(profileId: String) -> [UsageSample]
+    /// The newest resource reading with its full history; nil before the first one.
+    func systemHealth() -> SystemHealth?
     /// Refuse a command up front: (HTTP status, message), or nil to accept it.
     func check(_ command: BridgeCommand) -> (Int, String)?
     func perform(_ command: BridgeCommand, device: Device, done: @escaping (JobStatus, String?) -> Void)
@@ -172,6 +188,15 @@ public final class BridgeServer: @unchecked Sendable {
         }
     }
 
+    /// Sends the newest resource reading (newest history point only) to phones watching it.
+    public func publish(system h: SystemHealth) {
+        queue.async { [self] in
+            guard conns.values.contains(where: { $0.isSocket && $0.watchingSystem }),
+                  let data = try? WireCoder.encoder.encode(WSServerMessage.system(h.latestOnly)) else { return }
+            for c in conns.values where c.isSocket && c.watchingSystem { c.sendText(data) }
+        }
+    }
+
     /// Forgets a device and drops its connections.
     public func revoke(deviceId: String) {
         devices.remove(id: deviceId)
@@ -209,6 +234,7 @@ public final class BridgeServer: @unchecked Sendable {
         var isSocket = false
         var device: Device?
         var feed: (String, MessageSource)?
+        var watchingSystem = false
         weak var server: BridgeServer?
 
         init(_ c: NWConnection) { self.c = c }
@@ -291,6 +317,10 @@ public final class BridgeServer: @unchecked Sendable {
                 if let id = conn.device?.id { devices.touch(id) }   // tells the Live Activity driver the app is open
                 if let d = try? WireCoder.encoder.encode(WSServerMessage.pong) { conn.sendText(d) }
             case .unsubscribe: conn.feed = nil
+            case .unwatchSystem: conn.watchingSystem = false
+            case .watchSystem:
+                conn.watchingSystem = true
+                if let h = handler?.systemHealth(), let d = try? WireCoder.encoder.encode(WSServerMessage.system(h)) { conn.sendText(d) }
             case .subscribe:
                 guard let id = m.chatId, let sub = handler?.subscribe(chatId: id) else { conn.feed = nil; return }
                 conn.feed = (id, sub.source)
@@ -353,6 +383,8 @@ public final class BridgeServer: @unchecked Sendable {
             return page.map { .json($0) } ?? .error(404, "No such chat")
         case ("GET", 1, "folders"):
             return .json(handler.folders(profileId: req.query["profile"] ?? ""))
+        case ("GET", 1, "system"):
+            return handler.systemHealth().map { .json($0) } ?? .error(503, "No reading yet")
         case ("GET", 3, "accounts") where p[2] == "usage":
             return .json(handler.usage(profileId: p[1]))
         case ("POST", 1, "devices"):
@@ -400,6 +432,12 @@ public final class BridgeServer: @unchecked Sendable {
         case ("moves", 2, "restart"): cmd = .restartMoves
         case ("moves", 3, "undo"): cmd = .undoMove(id: p[1])
         case ("moves", 3, "cancel"): cmd = .cancelMove(id: p[1])
+        case ("system", 3, "quit") where p[1] == "apps": cmd = req.decode(QuitAppBody.self).map { .quitApp(appId: $0.appId) }
+        case ("system", 3, "kill") where p[1] == "processes": cmd = req.decode(KillBody.self).map { .killProcess(pid: $0.pid) }
+        case ("system", 3, "close-idle") where p[1] == "claude": cmd = .closeIdleClaude
+        case ("system", 3, "clean") where p[1] == "disk":
+            cmd = req.decode(CleanBody.self).flatMap { $0.targets.isEmpty ? nil : .cleanDisk(targets: $0.targets) }
+        case ("system", 2, "auto"): cmd = req.decode(AutoActBody.self).map { .setAutoAct(enabled: $0.enabled) }
         default: return .error(404, "Not found")
         }
         guard let cmd else { return .error(400, "Bad body") }

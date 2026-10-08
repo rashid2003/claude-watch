@@ -19,6 +19,8 @@ struct MacView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 StatusStrip(section: "mac")
                 Divider()
+                SystemSection()
+                Divider()
                 TimelineView(.periodic(from: .now, by: 15)) { ctx in
                     VStack(alignment: .leading, spacing: 5) {
                         kv("name", store.bridgeStatus?.macName ?? store.credentials?.macName ?? "—")
@@ -227,6 +229,7 @@ struct MacView: View {
         case .finished: "chat finished"
         case .failed: "chat failed / hit limit"
         case .account: "limit reset · cap soon"
+        case .system: "mac under pressure"
         }
     }
 

@@ -24,6 +24,9 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     private var firstSnapshot = true
     private var sleepAssertion: IOPMAssertionID = 0
     private let work = DispatchQueue(label: "claude-watch.remote-actions")
+    /// Set by WatchModel; the source of `systemHealth()` and of re-measuring after a clean.
+    weak var systemWatch: SystemWatch?
+    private var health: SystemHealth?
     /// Called on the main queue when devices, pairing or status change (menu UI).
     var onChange: (() -> Void)?
 
@@ -133,9 +136,10 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
 
     /// Adds headless prompts; a chat with one counts as waiting.
     private func merge(_ s: Snapshot) -> Snapshot {
-        let extra = broker.prompts
-        guard !extra.isEmpty else { return s }
         var m = s
+        m.systemLevel = lock.withLock { health?.level }
+        let extra = broker.prompts
+        guard !extra.isEmpty else { return m }
         m.prompts += extra
         let waiting = Set(extra.map(\.chatId))
         for a in m.accounts.indices {
@@ -152,6 +156,33 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
 
     private func profile(_ id: String) -> Profile? {
         lock.withLock { latest }?.profiles.first { $0.id == id } ?? monitor.profile(id: id)
+    }
+
+    // MARK: System health
+
+    /// Every reading: streams it to watching phones, and republishes the snapshot when the level changes.
+    func systemSample(_ h: SystemHealth) {
+        let changed = lock.withLock { () -> Bool in
+            let c = health?.level != h.level
+            health = h
+            return c
+        }
+        server.publish(system: h)
+        if changed { republish() }
+    }
+
+    func systemAlert(_ level: HealthLevel, _ h: SystemHealth) {
+        pushSystem(title: SystemText.title(level, reasons: h.reasons), body: SystemText.body(reasons: h.reasons, apps: h.apps))
+    }
+
+    func pushSystem(title: String, body: String) {
+        push(PushNote(category: "SYSTEM", title: title, body: body, collapseId: "system"), .system)
+    }
+
+    func systemHealth() -> SystemHealth? {
+        guard var h = systemWatch?.latest ?? lock.withLock({ health }) else { return nil }
+        h.auto = monitor.config.system.auto.summary
+        return h
     }
 
     // MARK: BridgeHandler reads
@@ -239,6 +270,15 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return (400, "Write a prompt first") }
         case .retry(let item), .cancelRetry(let item):
             guard lock.withLock({ latest })?.queue.contains(where: { $0.id == item }) == true else { return (404, "Not in the retry queue") }
+        case .quitApp(let id):
+            guard lock.withLock({ health })?.apps.contains(where: { $0.id == id && $0.canQuit }) == true else {
+                return (404, "That app isn't running any more")
+            }
+        case .killProcess(let pid):
+            let g = KillGuard.allowsLive(pid: pid)
+            if !g.ok { return (403, g.message) }
+        case .cleanDisk(let t):
+            if let bad = t.first(where: { !DiskCleaner.ids.contains($0) }) { return (400, "Unknown disk target \(bad)") }
         default: break
         }
         return nil
@@ -339,7 +379,22 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             let (stuck, finished, _) = monitor.restartAndRunMoves(only: ids)
             if !stuck.isEmpty { return (.failed, "Couldn't quit: " + stuck.map(\.name).joined(separator: ", ")) }
             return (.done, "\(finished.filter { $0.status == .done }.count) moved")
+
+        case .quitApp(let id): return system(.quitApp(id))
+        case .killProcess(let pid): return system(.kill(pid))
+        case .closeIdleClaude: return system(.closeIdleClaude)
+        case .cleanDisk(let t):
+            defer { systemWatch?.refreshCleanable() }
+            return system(.clean(t))
+        case .setAutoAct(let on):
+            monitor.updateConfig({ $0.system.auto.enabled = on }, done: nil)
+            return (.done, on ? "Auto-act on" : "Auto-act off")
         }
+    }
+
+    private func system(_ a: SystemAction) -> (JobStatus, String?) {
+        let r = SystemActions.run(a, snapshot: lock.withLock { latest }, apps: lock.withLock { health }?.apps ?? [])
+        return (r.ok ? .done : .failed, r.message)
     }
 
     // MARK: Push

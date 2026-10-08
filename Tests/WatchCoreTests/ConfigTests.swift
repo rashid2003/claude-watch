@@ -53,4 +53,19 @@ final class ConfigTests: XCTestCase {
         try Data("{ not json".utf8).write(to: url)
         XCTAssertNil(Config.load(from: url))
     }
+
+    func testSystemConfigDefaultsAndPartialDecode() throws {
+        let empty = try JSONCoder.decoder.decode(Config.self, from: Data("{}".utf8))
+        XCTAssertEqual(empty.system.diskWarnGB, 50)
+        XCTAssertEqual(empty.system.diskCriticalGB, 20)
+        XCTAssertFalse(empty.system.auto.enabled)
+        XCTAssertEqual(empty.system.auto.afterSeconds, 120)
+        let json = #"{"system":{"auto":{"enabled":true,"quitApps":["qemu-system-aarch64"],"cleanTargets":["trash","npm"]}}}"#
+        let partial = try JSONCoder.decoder.decode(Config.self, from: Data(json.utf8))
+        XCTAssertTrue(partial.system.auto.enabled)
+        XCTAssertEqual(partial.system.auto.quitApps, ["qemu-system-aarch64"])
+        XCTAssertEqual(partial.system.auto.cleanTargets, ["npm"], "trash is never auto-emptied")
+        XCTAssertEqual(partial.system.diskWarnGB, 50)
+        XCTAssertEqual(partial.system.auto.afterSeconds, 120)
+    }
 }
