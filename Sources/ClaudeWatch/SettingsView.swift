@@ -8,6 +8,7 @@ import WatchCore
 struct SettingsView: View {
     @EnvironmentObject var model: WatchModel
     @State private var login = LoginItem()
+    @State private var terminalHook = TerminalHookItem()
 
     var cfg: Config { model.config }
 
@@ -120,6 +121,12 @@ struct SettingsView: View {
                 Toggle("Keep awake when paired", isOn: bind(\.keepAwakeWhenPaired))
                 Toggle("Only on AC power", isOn: bind(\.keepAwakeOnlyOnAC))
                     .disabled(!cfg.keepAwakeWhenPaired)
+                Toggle("Answer terminal prompts from iPhone",
+                       isOn: Binding(get: { terminalHook.installed }, set: { terminalHook.set($0) }))
+                    .disabled(!terminalHook.installed && (TerminalHookItem.cli == nil || !cfg.bridgeEnabled))
+                if let e = terminalHook.error {
+                    Text(e).font(Theme.monoSmall).foregroundStyle(Theme.red)
+                }
                 if bridgeNeedsRestart {
                     HStack {
                         Text("Restart Session Watch to apply the bridge change.").foregroundStyle(Theme.yellow)
@@ -130,7 +137,10 @@ struct SettingsView: View {
             } header: { header("iphone bridge") } footer: {
                 note("Only phones signed into this Mac's Tailscale account can connect when the owner check is on. "
                      + "The relay lets a paired iPhone reach this Mac without Tailscale; everything through it is "
-                     + "end-to-end encrypted with a key from the pairing QR. Pair again after turning it on.")
+                     + "end-to-end encrypted with a key from the pairing QR. Pair again after turning it on. "
+                     + "Answering terminal prompts adds a PermissionRequest hook to ~/.claude/settings.json (backed up "
+                     + "first): chats run with `claude` in a terminal then also ask the phone, and the terminal's own "
+                     + "prompt keeps working.")
             }
 
             Section {
@@ -149,9 +159,9 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .font(Theme.mono)
-        .onAppear { login.refresh(); model.trusted = UIRetry.isTrusted }
+        .onAppear { login.refresh(); terminalHook.refresh(); model.trusted = UIRetry.isTrusted }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            login.refresh(); model.trusted = UIRetry.isTrusted
+            login.refresh(); terminalHook.refresh(); model.trusted = UIRetry.isTrusted
         }
     }
 
@@ -230,6 +240,38 @@ private struct CommitTextField: View {
     func commit() {
         let t = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty { draft = value } else if t != value { value = t }
+    }
+}
+
+/// "Answer terminal prompts from iPhone": our PermissionRequest hook in Claude Code's settings.json.
+struct TerminalHookItem {
+    var settings: URL = Paths.claudeSettings
+    static var cli: String? { BridgeController.cliPath() }
+
+    private(set) var installed = false
+    private(set) var error: String?
+
+    init(settings: URL = Paths.claudeSettings) {
+        self.settings = settings
+        refresh()
+    }
+
+    mutating func refresh() { installed = PromptHookInstaller.isInstalled(settings: settings) }
+
+    mutating func set(_ on: Bool) {
+        do {
+            if on {
+                guard let cli = Self.cli else { throw PromptHookInstaller.InstallError.unreadable("claude-watch CLI not found") }
+                try PromptHookInstaller.install(settings: settings,
+                                                command: PromptHookInstaller.command(cli: cli, socket: Paths.bridgeSocket))
+            } else {
+                try PromptHookInstaller.remove(settings: settings)
+            }
+            error = nil
+        } catch {
+            self.error = (on ? "Couldn't add the hook: " : "Couldn't remove the hook: ") + error.localizedDescription
+        }
+        refresh()
     }
 }
 

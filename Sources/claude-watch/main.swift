@@ -189,6 +189,9 @@ func usage() -> Never {
       claude-watch probe-prompt <chat> dry-run answering a prompt: lists the window's buttons, presses nothing
       claude-watch prompt-tool --socket <path> --session <id>
                                        (internal) permission prompt MCP server for iPhone replies
+      claude-watch prompt-hook [--socket <path>] [--wait <seconds>]
+                                       (internal) Claude Code PermissionRequest hook: asks the iPhone
+                                       about a terminal chat's prompt (Settings › Answer terminal prompts)
     """)
     exit(0)
 }
@@ -326,6 +329,17 @@ case "prompt-tool":
     func flag(_ n: String) -> String? { args.firstIndex(of: n).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
     guard let socket = flag("--socket"), let session = flag("--session") else { usage() }
     PromptTool.serve(socketPath: socket, sessionId: session)
+
+case "prompt-hook":
+    // Run by Claude Code (terminal chats) before a permission prompt; JSON on stdin, decision on stdout.
+    // Printing nothing leaves the decision to the terminal's own prompt.
+    func flag(_ n: String) -> String? { args.firstIndex(of: n).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
+    let input = FileHandle.standardInput.readDataToEndOfFile()
+    let wait = flag("--wait").flatMap(Double.init).map { max(1, min($0, PromptBroker.hookMaxWait)) } ?? PromptHook.defaultWait
+    if let out = PromptHook.run(stdin: input, socketPath: flag("--socket") ?? Paths.bridgeSocket, wait: wait) {
+        FileHandle.standardOutput.write(out + Data([0x0A]))
+    }
+    exit(0)
 
 case "set-apns-key":
     func flag(_ n: String) -> String? { args.firstIndex(of: n).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
