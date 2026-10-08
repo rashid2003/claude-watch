@@ -12,9 +12,7 @@ struct LimitsActivityAttributes: ActivityAttributes {
 /// What the app hands the widgets through a shared Keychain group (no app group needed): the latest limits, and
 /// enough of the pairing for a widget to ask the Mac itself when the app hasn't run for a while.
 enum WidgetShare {
-    /// `<team>.<app id>.shared`, from Info.plist so Session Watch Next (`dev.lajward.SessionWatch.next`) has its own.
-    static let group = Bundle.main.object(forInfoDictionaryKey: "SWKeychainShareGroup") as? String
-        ?? "6W5NJUTUCV.dev.lajward.SessionWatch.shared"
+    static let group = "6W5NJUTUCV.dev.lajward.SessionWatch.shared"
     static let kind = "limits"
 
     struct Cached: Codable {

@@ -6,7 +6,7 @@ import WatchProtocol
 struct PairingView: View {
     @Environment(RemoteStore.self) private var store
     @State private var host = ""
-    @State private var port = PairingView.defaultPort
+    @State private var port = "7433"
     @State private var code = ""
     @State private var busy = false
     @State private var error: String?
@@ -14,8 +14,6 @@ struct PairingView: View {
     @FocusState private var focus: Field?
 
     private enum Field { case host, port, code }
-    /// 7433, or 7434 in Session Watch Next (pairs with the Mac's Next build by default).
-    static let defaultPort = Bundle.main.object(forInfoDictionaryKey: "SWDefaultPort") as? String ?? "7433"
     private let hasCamera = QRScanner.isAvailable
     @ScaledMetric(relativeTo: .subheadline) private var labelWidth: CGFloat = 40
 
@@ -51,7 +49,7 @@ struct PairingView: View {
                                 .autocorrectionDisabled()
                         }
                         field("port", focus: .port) {
-                            TextField(PairingView.defaultPort, text: $port).keyboardType(.numberPad)
+                            TextField("7433", text: $port).keyboardType(.numberPad)
                         }
                         field("code", focus: .code) {
                             TextField("6 digits", text: $code)
@@ -77,7 +75,7 @@ struct PairingView: View {
                         } else {
                             Button("↵ pair") {
                                 let hosts = host.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                                Task { await pair(hosts: hosts, port: Int(port) ?? Int(PairingView.defaultPort) ?? 7433, code: code) }
+                                Task { await pair(hosts: hosts, port: Int(port) ?? 7433, code: code) }
                             }
                             .buttonStyle(.clay)
                             .fixedSize()

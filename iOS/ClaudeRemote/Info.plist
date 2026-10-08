@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>$(SW_DISPLAY_NAME)</string>
+	<string>Session Watch</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -41,10 +41,6 @@
 			</dict>
 		</dict>
 	</dict>
-	<key>SWKeychainShareGroup</key>
-	<string>$(DEVELOPMENT_TEAM).$(SW_APP_ID).shared</string>
-	<key>SWDefaultPort</key>
-	<string>$(SW_DEFAULT_PORT)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>The camera scans the pairing code shown on your Mac.</string>
 	<key>NSFaceIDUsageDescription</key>
