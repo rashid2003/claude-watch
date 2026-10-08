@@ -144,6 +144,9 @@ public final class Monitor {
     /// The transcript of a chat (monitor queue only: use from `perform` / `sync`).
     public func transcriptURL(cliSessionId: String) -> URL? { scanner.transcriptURL(cliSessionId: cliSessionId) }
 
+    /// A main transcript's live work from the scanner's full read, and how far it read (monitor queue only).
+    public func workSeed(transcript url: URL) -> WorkSeed? { scanner.workSeed(for: url) }
+
     public func stop() { timer?.cancel(); scanner.save(); engine.saveState() }
 
     /// Runs one poll synchronously (for `claude-watch status`).

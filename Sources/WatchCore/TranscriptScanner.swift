@@ -102,6 +102,12 @@ public final class TranscriptScanner {
         return cache.files[main.path]?.work?.live(now: now).brief
     }
 
+    /// The live work kept for a transcript (main transcripts only) and the offset it was read up to.
+    func workSeed(for url: URL) -> WorkSeed? {
+        guard let st = cache.files[url.path], let w = st.work else { return nil }
+        return WorkSeed(tracker: w, offset: st.offset)
+    }
+
     public func buckets(for sessionId: String) -> TokenBuckets { cache.buckets[sessionId] ?? TokenBuckets() }
 
     public func transcriptURL(cliSessionId: String) -> URL? {

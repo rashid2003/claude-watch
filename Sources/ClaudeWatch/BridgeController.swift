@@ -34,7 +34,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     /// Called on the main queue with every chat's draft when one changes (Mac chat list).
     var onDrafts: (([String: ChatDraft]) -> Void)?
     /// Transcripts read from their end, so opening a chat on the phone reads only its newest lines and reopening only what is new.
-    private let transcripts = TranscriptCache()
+    private let transcripts: TranscriptCache
     private var lastActivity: [String: SessionStatus.Activity] = [:]
     private var knownPrompts = Set<String>()
     private var firstSnapshot = true
@@ -56,6 +56,9 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
 
     init(monitor: Monitor) {
         self.monitor = monitor
+        // Live work of a chat opened from its end starts from the scanner's full read. The cache is only
+        // used on the bridge queue, never the monitor's, so waiting on the monitor queue here is safe.
+        transcripts = TranscriptCache(workSeed: { [weak monitor] url in monitor?.sync { $0.workSeed(transcript: url) } })
         let cfg = monitor.config
         server = BridgeServer(port: UInt16(clamping: cfg.bridgePort), devices: DeviceStore(url: Paths.devices),
                               audit: AuditLog(url: Paths.remoteLog), macName: Host.current().localizedName ?? "Mac",
