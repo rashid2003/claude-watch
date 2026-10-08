@@ -80,6 +80,12 @@ public protocol BridgeHandler: AnyObject {
     /// Refuse a command up front: (HTTP status, message), or nil to accept it.
     func check(_ command: BridgeCommand) -> (Int, String)?
     func perform(_ command: BridgeCommand, device: Device, done: @escaping (JobStatus, String?) -> Void)
+    /// The phone's unsent text for a chat (empty clears it). False when the chat is unknown.
+    func setDraft(chatId: String, text: String, device: Device) -> Bool
+}
+
+extension BridgeHandler {
+    public func setDraft(chatId: String, text: String, device: Device) -> Bool { false }
 }
 
 public final class BridgeServer: @unchecked Sendable {
@@ -197,6 +203,11 @@ public final class BridgeServer: @unchecked Sendable {
                   let data = try? WireCoder.encoder.encode(WSServerMessage.system(h.latestOnly)) else { return }
             for c in conns.values where c.isSocket && c.watchingSystem { c.sendText(data) }
         }
+    }
+
+    /// Chats some connected phone is subscribed to right now.
+    public var watchedChats: Set<String> {
+        queue.sync { Set(conns.values.compactMap { $0.isSocket ? $0.feed?.0 : nil }) }
     }
 
     /// Forgets a device and drops its connections.
@@ -404,6 +415,10 @@ public final class BridgeServer: @unchecked Sendable {
             }
             onDevicesChanged?()
             return .json(handler.status(for: devices.all.first { $0.id == device.id } ?? device))
+        case ("POST", 3, "chats") where p[2] == "draft":
+            // Not a job: drafts arrive often and need no status or audit entry.
+            guard let b = req.decode(DraftBody.self) else { return .error(400, "Bad body") }
+            return handler.setDraft(chatId: p[1], text: b.text, device: device) ? HTTPResponse(status: 204) : .error(404, "No such chat")
         case ("DELETE", 2, "devices") where p[1] == "self":
             revoke(deviceId: device.id)
             return HTTPResponse(status: 204)

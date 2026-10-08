@@ -38,6 +38,12 @@ final class FakeHandler: BridgeHandler {
         performed.append(command.name)
         finish = done
     }
+    var drafts: [String: String] = [:]
+    func setDraft(chatId: String, text: String, device: Device) -> Bool {
+        guard chatId == "local_1" else { return false }
+        drafts[chatId] = text
+        return true
+    }
 }
 
 final class ServerTests: XCTestCase {
@@ -125,6 +131,18 @@ final class ServerTests: XCTestCase {
 
         let (s4, _) = try await request("POST", "/v1/chats/local_1/reply", token: token, body: ReplyBody(text: "   "))
         XCTAssertEqual(s4, 400)
+    }
+
+    func testDraftsAreStoredWithoutAJob() async throws {
+        let token = try await pair()
+        let (s1, _) = try await request("POST", "/v1/chats/local_1/draft", token: token, body: DraftBody(text: "half"))
+        XCTAssertEqual(s1, 204)
+        XCTAssertEqual(handler.drafts["local_1"], "half")
+        XCTAssertTrue(handler.performed.isEmpty)
+        let (s2, _) = try await request("POST", "/v1/chats/nope/draft", token: token, body: DraftBody(text: "x"))
+        XCTAssertEqual(s2, 404)
+        let (s3, _) = try await request("POST", "/v1/chats/local_1/draft", token: token, body: ["nope": 1])
+        XCTAssertEqual(s3, 400)
     }
 
     func testStreamSnapshotSubscriptionJobsAndRevoke() async throws {

@@ -28,6 +28,8 @@ public enum Paths {
     /// This Mac's relay room and keys (0600).
     public static var relayIdentity: URL { support.appendingPathComponent("relay.json") }
     public static var replyQueue: URL { support.appendingPathComponent("reply-queue.json") }
+    /// Unsent composer text per chat (phone and desktop), 0600.
+    public static var drafts: URL { support.appendingPathComponent("drafts.json") }
     /// Unix socket for headless approval requests (paths are limited to 104 bytes).
     public static var bridgeSocket: String { support.appendingPathComponent("bridge.sock").path }
     /// Retry requests for the engine owner, one per line (see `RetryRequest`).

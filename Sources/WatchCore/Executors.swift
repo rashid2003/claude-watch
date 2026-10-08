@@ -195,7 +195,12 @@ public enum UIRetry {
     static func findComposer(_ app: AXUIElement) -> AXUIElement? {
         guard let win = attr(app, kAXFocusedWindowAttribute) ?? (attr(app, kAXWindowsAttribute) as? [AnyObject])?.first
         else { return nil }
-        var queue: [(AXUIElement, Int)] = [(win as! AXUIElement, 0)]
+        return composer(in: win as! AXUIElement)
+    }
+
+    /// The lowest editable text area in one window.
+    static func composer(in win: AXUIElement) -> AXUIElement? {
+        var queue: [(AXUIElement, Int)] = [(win, 0)]
         var best: (AXUIElement, CGFloat)?
         var visited = 0
         while !queue.isEmpty, visited < 6000 {
