@@ -147,8 +147,11 @@ public struct NewChatBody: Codable, Sendable {
     public var profileId: String
     public var cwd: String
     public var prompt: String
-    public init(requestId: String = UUID().uuidString, profileId: String, cwd: String, prompt: String) {
-        self.requestId = requestId; self.profileId = profileId; self.cwd = cwd; self.prompt = prompt
+    /// The phone confirmed trusting a folder Claude Code hasn't been trusted in yet. Without it the Mac
+    /// refuses an untrusted folder; with it, it accepts the desktop's "Trust this workspace?" prompt.
+    public var trust: Bool?
+    public init(requestId: String = UUID().uuidString, profileId: String, cwd: String, prompt: String, trust: Bool? = nil) {
+        self.requestId = requestId; self.profileId = profileId; self.cwd = cwd; self.prompt = prompt; self.trust = trust
     }
 }
 
@@ -248,8 +251,20 @@ public struct BridgeStatus: Codable, Sendable {
 public struct FolderSuggestion: Codable, Hashable, Sendable, Identifiable {
     public var cwd: String
     public var lastUsedAt: Date
+    /// Claude Code trusts this folder (nil from Macs that don't say).
+    public var trusted: Bool?
     public var id: String { cwd }
-    public init(cwd: String, lastUsedAt: Date) { self.cwd = cwd; self.lastUsedAt = lastUsedAt }
+    public init(cwd: String, lastUsedAt: Date, trusted: Bool? = nil) {
+        self.cwd = cwd; self.lastUsedAt = lastUsedAt; self.trusted = trusted
+    }
+}
+
+/// `GET /v1/folders/check?path=`: whether a typed folder can take a new chat.
+public struct FolderCheck: Codable, Hashable, Sendable {
+    public var path: String
+    public var exists: Bool
+    public var trusted: Bool
+    public init(path: String, exists: Bool, trusted: Bool) { self.path = path; self.exists = exists; self.trusted = trusted }
 }
 
 // MARK: - WebSocket
