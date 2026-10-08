@@ -211,8 +211,10 @@ public final class BridgeServer: @unchecked Sendable {
     }
 
     /// Forgets a device and drops its connections.
-    public func revoke(deviceId: String) {
+    public func revoke(deviceId: String, by who: String = "mac") {
+        let name = devices.all.first { $0.id == deviceId }?.name ?? deviceId
         devices.remove(id: deviceId)
+        audit.append(device: name, command: "revoke", target: deviceId, result: "by \(who)")
         queue.async { [self] in
             for c in conns.values where c.device?.id == deviceId { c.close() }
         }
@@ -420,7 +422,7 @@ public final class BridgeServer: @unchecked Sendable {
             guard let b = req.decode(DraftBody.self) else { return .error(400, "Bad body") }
             return handler.setDraft(chatId: p[1], text: b.text, device: device) ? HTTPResponse(status: 204) : .error(404, "No such chat")
         case ("DELETE", 2, "devices") where p[1] == "self":
-            revoke(deviceId: device.id)
+            revoke(deviceId: device.id, by: "phone")
             return HTTPResponse(status: 204)
         case ("POST", _, _):
             return command(req, p, device, handler)

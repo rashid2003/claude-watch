@@ -13,7 +13,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     let monitor: Monitor
     let server: BridgeServer
     let broker = PromptBroker(path: Paths.bridgeSocket)
-    let pusher = Pusher(key: APNsKey.load())
+    let pusher = Pusher(key: Paths.isSideBySide ? nil : APNsKey.load())
     let liveActivities = LiveActivityDriver()
     let runner: HeadlessRunner
     private let lock = NSLock()

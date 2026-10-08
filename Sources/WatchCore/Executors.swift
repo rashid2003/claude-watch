@@ -9,6 +9,7 @@ public enum TokenStore {
     static let service = "claude-watch"
 
     public static func get(_ profileId: String) -> String? {
+        if Paths.isSideBySide { return nil }   // the installed app's keychain items would prompt for access
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                 kSecAttrService as String: service,
                                 kSecAttrAccount as String: profileId,

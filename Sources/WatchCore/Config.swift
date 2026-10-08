@@ -13,8 +13,16 @@ public enum Paths {
     public static var defaultProfile: URL { home.appendingPathComponent("Library/Application Support/Claude") }
     public static var profilesRoot: URL { home.appendingPathComponent("Claude-Profiles") }
 
+    /// The data folder: `claude-watch`, or another one for a side-by-side build such as Session Watch Next
+    /// (Info.plist `SWDataFolder`, or `CLAUDE_WATCH_DATA_FOLDER`, which the app passes on to the CLI).
+    public static let dataFolder: String = ProcessInfo.processInfo.environment["CLAUDE_WATCH_DATA_FOLDER"]
+        ?? (Bundle.main.object(forInfoDictionaryKey: "SWDataFolder") as? String) ?? "claude-watch"
+    /// A build running next to the installed app: its own data, port and relay room. It leaves the retry
+    /// engine, the keychain (CLI tokens, APNs key) and the login item to the installed app.
+    public static var isSideBySide: Bool { dataFolder != "claude-watch" }
+
     public static var support: URL {
-        let url = home.appendingPathComponent("Library/Application Support/claude-watch")
+        let url = home.appendingPathComponent("Library/Application Support/\(dataFolder)")
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
@@ -22,7 +30,8 @@ public enum Paths {
     public static var state: URL { support.appendingPathComponent("state.json") }
     public static var scanCache: URL { support.appendingPathComponent("scan-cache.json") }
     public static var retryLog: URL { support.appendingPathComponent("retry-log.jsonl") }
-    public static var engineLock: URL { support.appendingPathComponent("engine.lock") }
+    /// Shared by every build, so only one of them runs the retry engine.
+    public static var engineLock: URL { home.appendingPathComponent("Library/Application Support/claude-watch/engine.lock") }
     public static var devices: URL { support.appendingPathComponent("devices.json") }
     public static var remoteLog: URL { support.appendingPathComponent("remote-log.jsonl") }
     /// This Mac's relay room and keys (0600).
@@ -115,7 +124,7 @@ public struct Config: Codable, Sendable, Equatable {
     public var orgNames: [String: String] = [:]
     /// iPhone remote (ClaudeRemote): listens on the Tailscale addresses and 127.0.0.1.
     public var bridgeEnabled: Bool = true
-    public var bridgePort: Int = 7433
+    public var bridgePort: Int = Paths.isSideBySide ? 7434 : 7433
     /// Prevent idle sleep while a phone is paired, so it can reach the Mac.
     public var keepAwakeWhenPaired: Bool = false
     public var keepAwakeOnlyOnAC: Bool = true

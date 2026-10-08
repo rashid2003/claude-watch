@@ -243,7 +243,7 @@ struct LoginItem {
     /// First launch of a build with this feature: register once, then never again, so a user who
     /// turned it off stays off.
     static func registerOnFirstLaunch(defaults: UserDefaults = .standard) {
-        guard isAppBundle, !defaults.bool(forKey: registeredKey) else { return }
+        guard isAppBundle, !Paths.isSideBySide, !defaults.bool(forKey: registeredKey) else { return }
         defaults.set(true, forKey: registeredKey)
         if SMAppService.mainApp.status == .notRegistered { try? SMAppService.mainApp.register() }
     }
