@@ -172,7 +172,7 @@ final class RemoteStore {
     func setConnectVia(_ via: ConnectVia) async {
         guard let client else { return }
         var c = await client.credentials   // keeps what the client learned (host order, relay preference)
-        c.via = via == .auto ? nil : via
+        c.via = via == .preferred ? nil : via
         Keychain.save(c)
         credentials = c
         self.client = RemoteClient(credentials: c)

@@ -63,8 +63,8 @@ struct PairingWindow: View {
                 Button("New code") { newCode() }
             }
         }
-        if bridge.server.boundHosts.allSatisfy({ $0 == "127.0.0.1" }) {
-            Label("Tailscale isn't connected on this Mac, so only the Simulator can pair.", systemImage: "exclamationmark.triangle")
+        if bridge.server.boundHosts.allSatisfy({ $0 == "127.0.0.1" }) && bridge.relayStatus != .connected {
+            Label("The relay isn't connected and neither is Tailscale, so only the Simulator can pair.", systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.orange).font(.callout)
         }
         Divider()

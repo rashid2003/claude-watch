@@ -23,7 +23,7 @@ struct PairingView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("pair with your mac").font(Theme.monoBold)
-                        Text("On the Mac open ✻ claude-watch → iPhone… and scan the code. Both devices need Tailscale.")
+                        Text("On the Mac open Session Watch → iPhone and scan the code. It connects through the Session Watch relay; Tailscale is optional.")
                             .font(Theme.monoSmall)
                             .foregroundStyle(.secondary)
                     }
