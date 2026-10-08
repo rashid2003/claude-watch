@@ -41,8 +41,51 @@ final class LiveActivityTests: XCTestCase {
     func testQuietActivityGetsAHeartbeat() {
         let d = LiveActivityDriver(), dev = device()
         _ = d.plan(for: dev, limits(), macName: "Mac", now: t0)
-        XCTAssertTrue(d.plan(for: dev, limits(), macName: "Mac", now: t0 + 600).isEmpty)
+        XCTAssertTrue(d.plan(for: dev, limits(), macName: "Mac", now: t0 + LiveActivityDriver.heartbeat - 15).isEmpty)
         XCTAssertEqual(d.plan(for: dev, limits(), macName: "Mac", now: t0 + LiveActivityDriver.heartbeat + 1).count, 1)
+    }
+
+    func testHeartbeatKeepsAQuietActivityFreshWithinBudget() {
+        let d = LiveActivityDriver(), dev = device()
+        var sends: [ActivityPush] = []
+        // An hour of unchanged snapshots at the Mac's 15 s poll.
+        for i in 0...240 {
+            sends += d.plan(for: dev, limits(), macName: "Mac", now: t0 + Double(i) * 15).map(\.push)
+        }
+        XCTAssertEqual(sends.count, 13, "the first update, then one every 5 minutes")
+        XCTAssertTrue(sends.dropFirst().allSatisfy { $0.priority == 5 }, "heartbeats don't spend the push budget")
+        // Each push's stale date lands after the next one arrives, with room for one to go missing.
+        for (a, b) in zip(sends, sends.dropFirst()) {
+            XCTAssertGreaterThan(a.staleDate!.timeIntervalSince(b.now), LiveActivityDriver.heartbeat)
+        }
+        XCTAssertGreaterThan(ActivityPush.staleAfter, 2 * LiveActivityDriver.heartbeat)
+    }
+
+    func testEveryPushCarriesAStaleDate() throws {
+        func aps(_ e: ActivityPush.Event) throws -> [String: Any] {
+            let push = ActivityPush(event: e, state: limits(), macName: "Mac", important: false, now: t0)
+            let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: push.payload()) as? [String: Any])
+            return try XCTUnwrap(obj["aps"] as? [String: Any])
+        }
+        let expected = Int(t0.timeIntervalSince1970 + ActivityPush.staleAfter)
+        XCTAssertEqual(try aps(.start)["stale-date"] as? Int, expected)
+        XCTAssertEqual(try aps(.update)["stale-date"] as? Int, expected)
+        XCTAssertNil(try aps(.end)["stale-date"])
+        XCTAssertEqual(ActivityPush.staleAfter, 12 * 60)
+    }
+
+    func testMacPushesLeaveConnectedOutAndOldContentDecodes() throws {
+        let push = ActivityPush(event: .update, state: limits(), macName: "Mac", important: false, now: t0)
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: push.payload()) as? [String: Any])
+        let content = try XCTUnwrap((obj["aps"] as? [String: Any])?["content-state"] as? [String: Any])
+        XCTAssertNil(content["connected"], "a push from the Mac clears the phone's offline mark")
+        let old = #"{"accounts":[],"hidden":0,"prompts":0,"working":0,"updated":1800000000}"#
+        let back = try JSONDecoder().decode(LiveLimits.self, from: Data(old.utf8))
+        XCTAssertNil(back.connected)
+        XCTAssertFalse(back.disconnected)
+        var marked = limits()
+        marked.connected = false
+        XCTAssertTrue(try JSONDecoder().decode(LiveLimits.self, from: JSONEncoder().encode(marked)).disconnected)
     }
 
     func testStartsRemotelyWhenWantedWithoutAnActivity() {
