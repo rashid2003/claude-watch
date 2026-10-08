@@ -268,7 +268,12 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
 
     func quit() { NSApp.terminate(nil) }   // AppDelegate.applicationWillTerminate stops the bridge and monitor
 
-    func shutdown() { bridge?.stop(); monitor.stop() }
+    /// Quitting: the Live Activity hears the Mac is going offline (up to 2 s), then everything stops.
+    func shutdown() {
+        bridge?.macGoingOffline(LiveLimits.Offline.quit)
+        bridge?.stop()
+        monitor.stop()
+    }
 
     /// Quits and opens the app again (bridge port / on-off changes need a fresh process).
     func relaunch() {

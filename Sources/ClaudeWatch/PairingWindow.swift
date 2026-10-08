@@ -81,6 +81,13 @@ struct PairingWindow: View {
                          + (d.lastSeenAt.map { " · seen \(Fmt.ago($0))" } ?? "")
                          + (d.apnsToken == nil ? " · no push" : " · push on"))
                         .font(.caption).foregroundStyle(.secondary)
+                    Text(Self.versionLine(d.client)).font(.caption).foregroundStyle(.secondary)
+                    if WireProtocol.hint(phone: d.client?.protocolVersion, mac: WireProtocol.current) == .updatePhone {
+                        Label("Update Session Watch on this iPhone", systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange)
+                            .help("This iPhone's app speaks protocol \(d.client?.protocolVersion ?? WireProtocol.unversioned); "
+                                  + "this Mac speaks \(WireProtocol.current). It keeps working, but newer features won't show.")
+                    }
                 }
                 Spacer()
                 Button("Revoke", role: .destructive) { bridge.server.revoke(deviceId: d.id); refresh() }
@@ -98,6 +105,12 @@ struct PairingWindow: View {
     }
 
     func refresh() { devices = model.bridge?.server.devices.all ?? [] }
+
+    /// "App 1.3 (202610080636) · protocol 2", or a note that the app is too old to say.
+    static func versionLine(_ c: ClientInfo?) -> String {
+        guard let c else { return "App version unknown (an older build, or not seen since this Mac updated)" }
+        return "App \(c.label) · protocol \(c.protocolVersion.map(String.init) ?? "?")"
+    }
 
     static func qr(_ payload: PairingPayload) -> NSImage? {
         guard let data = try? WireCoder.encoder.encode(payload) else { return nil }

@@ -30,6 +30,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     private let draftReader = DesktopDraftReader()
     private let draftQueue = DispatchQueue(label: "claude-watch.drafts", qos: .utility)
     private var draftTimer: DispatchSourceTimer?
+    private var powerObservers: [NSObjectProtocol] = []
     /// Called on the main queue with every chat's draft when one changes (Mac chat list).
     var onDrafts: (([String: ChatDraft]) -> Void)?
     /// Parsed transcripts, so reopening a chat on the phone only reads what's new.
@@ -97,6 +98,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         draftTimer = t
         let all = drafts.all
         DispatchQueue.main.async { [weak self] in self?.onDrafts?(all) }
+        observeSleep()
         // Development: pair the Simulator without the menu (CLAUDE_WATCH_DEV_PAIR_CODE=123456).
         if let code = ProcessInfo.processInfo.environment["CLAUDE_WATCH_DEV_PAIR_CODE"], code.count == 6 {
             server.pairing.open(code: code, lifetime: 3600)
@@ -104,6 +106,8 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     }
 
     func stop() {
+        powerObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        powerObservers = []
         draftTimer?.cancel()
         draftTimer = nil
         relay?.stop()
@@ -111,6 +115,20 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         server.stop()
         broker.stop()
         setKeepAwake(false)
+    }
+
+    /// Live Activities show the Mac offline as soon as it sleeps, and current again as soon as it wakes.
+    private func observeSleep() {
+        let nc = NSWorkspace.shared.notificationCenter
+        // Delivered on the main thread; the system waits for observers, so the goodbye push gets out before sleep.
+        powerObservers = [
+            nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
+                self?.macGoingOffline(LiveLimits.Offline.sleep)
+            },
+            nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { [weak self] _ in
+                self?.macWoke()
+            },
+        ]
     }
 
     // MARK: Snapshot fan-out
@@ -203,6 +221,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         if let s = lock.withLock({ latest }) { server.publish(snapshot: merge(s)) }
         let all = drafts.all
         DispatchQueue.main.async { [weak self] in self?.onDrafts?(all) }
+        observeSleep()
     }
 
     private func session(_ id: String) -> SessionStatus? {
@@ -508,16 +527,48 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         for d in server.devices.all where d.liveActivity != nil || d.activityToken != nil {
             for (token, push) in liveActivities.plan(for: d, limits, macName: server.macName) {
                 let id = d.id, isStart = push.event == .start
-                pusher.send(push, token: token, environment: d.apnsEnvironment) { [weak self] in
+                pusher.send(push, token: token, environment: d.apnsEnvironment, gone: { [weak self] in
                     self?.liveActivities.forget(id)
                     self?.server.devices.update(id) { isStart ? ($0.activityStartToken = nil) : ($0.activityToken = nil) }
-                }
+                }, done: { [weak self] status in
+                    // Never left the Mac (network not up yet, e.g. just after waking): try again on the next snapshot.
+                    if status == 0, push.event == .update { self?.liveActivities.forget(id) }
+                })
                 // An ended activity's token is dead; the phone sends the new one once the fresh activity starts.
                 if push.event == .end {
                     liveActivities.forget(id)
                     server.devices.update(id) { $0.activityToken = nil; $0.activityStartedAt = nil }
                 }
             }
+        }
+    }
+
+    /// The Mac is going to sleep or quitting: tells each running Live Activity it is offline now, rather than leaving
+    /// it to go stale minutes later. Waits up to `wait` for Apple to take the pushes (call it off the bridge's queues;
+    /// the URLSession answers on its own). Nothing more goes out until `macWoke`.
+    func macGoingOffline(_ reason: String, wait: TimeInterval = 2) {
+        guard pusher.isConfigured, let snap = lock.withLock({ latest }).map(merge) else { return }
+        let sends = liveActivities.goingOffline(server.devices.all, LiveLimits(snap), reason: reason, macName: server.macName)
+        guard !sends.isEmpty else { return }
+        let group = DispatchGroup()
+        let env = Dictionary(server.devices.all.map { ($0.id, $0.apnsEnvironment) }, uniquingKeysWith: { a, _ in a })
+        for (id, token, push) in sends {
+            group.enter()
+            pusher.send(push, token: token, environment: env[id] ?? nil, gone: { [weak self] in
+                self?.server.devices.update(id) { $0.activityToken = nil }
+            }, done: { _ in group.leave() })
+        }
+        _ = group.wait(timeout: .now() + wait)
+    }
+
+    /// Back from sleep: the next snapshot goes to every Live Activity at once, without waiting for a change.
+    func macWoke() {
+        liveActivities.resume()
+        guard let s = lock.withLock({ latest }) else { return }
+        // Give the network a moment; a push that still can't leave is retried on the following snapshot.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self else { return }
+            self.driveLiveActivities(self.merge(self.lock.withLock { self.latest } ?? s))
         }
     }
 

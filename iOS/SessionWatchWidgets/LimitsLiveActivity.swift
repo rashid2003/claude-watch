@@ -33,7 +33,7 @@ struct LimitsLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 6) {
                         ForEach(l.accounts.prefix(3)) { AccountLine(account: $0, compact: true).dimmed(offline) }
-                        if offline { OfflineNote(lastSeen: l.updatedDate) }
+                        if offline { OfflineNote(lastSeen: l.updatedDate, reason: l.offline) }
                     }
                     .padding(.horizontal, 4)
                     .padding(.top, 2)
@@ -100,7 +100,7 @@ struct LockScreenLimits: View {
             if limits.hidden > 0 {
                 Text("+\(limits.hidden) more").font(WTheme.mono(10)).foregroundStyle(WTheme.dim)
             }
-            if offline { OfflineNote(lastSeen: limits.updatedDate) }
+            if offline { OfflineNote(lastSeen: limits.updatedDate, reason: limits.offline) }
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 14)
@@ -189,12 +189,14 @@ struct AccountLine: View {
 }
 
 /// "Mac offline · last seen 6:12", from when the Mac took its last snapshot (with the weekday if not today).
+/// "Mac asleep" or "Mac app quit" when the Mac said so in its last push.
 struct OfflineNote: View {
     let lastSeen: Date
+    var reason: String?
     var body: some View {
         let today = Calendar.current.isDateInToday(lastSeen)
         HStack(spacing: 0) {
-            Text("Mac offline").foregroundStyle(WTheme.red)
+            Text(title).foregroundStyle(WTheme.red)
             Text(" · last seen ")
             Text(lastSeen, format: today ? .dateTime.hour().minute() : .dateTime.weekday().hour().minute())
         }
@@ -202,6 +204,14 @@ struct OfflineNote: View {
         .foregroundStyle(WTheme.dim)
         .lineLimit(1)
         .accessibilityElement(children: .combine)
+    }
+
+    private var title: String {
+        switch reason {
+        case LiveLimits.Offline.sleep: "Mac asleep"
+        case LiveLimits.Offline.quit: "Mac app quit"
+        default: "Mac offline"
+        }
     }
 }
 
@@ -216,9 +226,11 @@ extension View {
 } contentStates: {
     LiveLimits.sample
     LiveLimits.sampleOffline
+    LiveLimits.sampleAsleep
 }
 
 private extension LiveLimits {
     static var sampleOffline: LiveLimits { var l = sample; l.connected = false; return l }
+    static var sampleAsleep: LiveLimits { sample.goingOffline(LiveLimits.Offline.sleep) }
 }
 #endif

@@ -30,6 +30,13 @@ final class RemoteStore {
     }
     private(set) var bridgeStatus: BridgeStatus?
     private(set) var lastError: String?
+    /// The phone and the Mac speak different protocol versions: which one should be updated. Both keep working.
+    var versionHint: WireProtocol.Hint? {
+        guard !isDemo, let s = bridgeStatus, let h = s.hint(), h != dismissedHint else { return nil }
+        return h
+    }
+    /// The hint the user closed; it stays hidden until the next launch or a different hint.
+    var dismissedHint: WireProtocol.Hint?
 
     // The chat on screen.
     private(set) var openChatId: String?

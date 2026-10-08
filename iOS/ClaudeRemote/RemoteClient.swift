@@ -80,6 +80,7 @@ actor RemoteClient {
             req.httpMethod = "POST"
             req.httpBody = body
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.identify()
             do {
                 let (data, resp) = try await session.data(for: req)
                 let r: PairResponse = try decode(data, resp)
@@ -146,6 +147,7 @@ actor RemoteClient {
         comps.scheme = "ws"
         var req = URLRequest(url: comps.url!)
         req.setValue("Bearer \(credentials.token)", forHTTPHeaderField: "Authorization")
+        req.identify()
         req.timeoutInterval = 15
         return StreamSocket(task: session.webSocketTask(with: req))
     }
@@ -170,6 +172,7 @@ actor RemoteClient {
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("Bearer \(credentials.token)", forHTTPHeaderField: "Authorization")
+        req.identify()
         if let body {
             req.httpBody = body
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -206,6 +209,7 @@ actor RemoteClient {
                 req.timeoutInterval = 15   // TLS to the relay, then the Mac's answer
             }
             req.setValue("Bearer \(credentials.token)", forHTTPHeaderField: "Authorization")
+            req.identify()
             do {
                 let (_, resp) = try await probe.data(for: req)
                 if (resp as? HTTPURLResponse)?.statusCode == 401 { throw RemoteError.unauthorized }
@@ -265,6 +269,19 @@ actor RemoteClient {
                 ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
             throw RemoteError.server(status: http.statusCode, message: msg)
         }
+    }
+}
+
+extension ClientInfo {
+    /// This build, as the Mac's paired devices list shows it.
+    static let thisApp = ClientInfo(appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+                                    build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+}
+
+extension URLRequest {
+    /// Tells the Mac which app version and protocol is asking (older Macs ignore the headers).
+    mutating func identify() {
+        for (k, v) in ClientInfo.thisApp.headers { setValue(v, forHTTPHeaderField: k) }
     }
 }
 

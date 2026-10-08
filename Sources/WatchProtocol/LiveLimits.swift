@@ -38,23 +38,41 @@ public struct LiveLimits: Codable, Hashable, Sendable {
     public var working: Int
     /// When the Mac took the snapshot (unix seconds): "last seen" once the activity goes stale.
     public var updated: Double
-    /// False when the iPhone app itself lost the Mac. The Mac never sends it, so any push from it clears this.
+    /// False when the iPhone app itself lost the Mac, or when the Mac said it was going away (see `offline`).
+    /// The Mac's ordinary pushes leave it out, so any later push from it clears this.
     /// Optional so content from older Macs and apps still decodes.
     public var connected: Bool?
+    /// Set in the Mac's last push before it sleeps or quits: why it went away (`Offline.sleep`, `Offline.quit`).
+    /// That push also sets `connected` to false and a stale date of now, so widget builds that don't know this
+    /// field still show the Mac as offline at once. A string, not an enum, so a reason added later still decodes.
+    public var offline: String?
+
+    public enum Offline {
+        public static let sleep = "sleep"
+        public static let quit = "quit"
+    }
 
     /// How long a Live Activity counts as current without a fresh update (the Mac sends heartbeats well inside this).
     public static let staleAfter: TimeInterval = 12 * 60
 
     public init(accounts: [Account], hidden: Int = 0, prompts: Int = 0, working: Int = 0, updated: Double,
-                connected: Bool? = nil) {
+                connected: Bool? = nil, offline: String? = nil) {
         self.accounts = accounts; self.hidden = hidden; self.prompts = prompts; self.working = working; self.updated = updated
-        self.connected = connected
+        self.connected = connected; self.offline = offline
     }
 
     public var updatedDate: Date { Date(timeIntervalSince1970: updated) }
 
-    /// The phone marked this as cut off from the Mac.
-    public var disconnected: Bool { connected == false }
+    /// Cut off from the Mac: the phone lost it, or the Mac said it was going to sleep or quitting.
+    public var disconnected: Bool { connected == false || offline != nil }
+
+    /// The same numbers, marked as the Mac's goodbye before it sleeps or quits.
+    public func goingOffline(_ reason: String) -> LiveLimits {
+        var l = self
+        l.connected = false
+        l.offline = reason
+        return l
+    }
 
     /// The account to feature where there's room for one: limited first (soonest back), then the busiest.
     public var headline: Account? {
