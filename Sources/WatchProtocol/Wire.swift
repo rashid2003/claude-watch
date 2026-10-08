@@ -37,9 +37,30 @@ public struct ChatMessage: Codable, Hashable, Sendable, Identifiable {
 
 public struct MessagesPage: Codable, Sendable {
     public var messages: [ChatMessage]
-    /// Cursor for the previous page (index of the first message here), nil at the start of the chat.
+    /// Index cursor for the previous page (index of the first message here), nil at the start of the chat
+    /// or when the page carries `cursor` instead.
     public var before: Int?
-    public init(messages: [ChatMessage], before: Int?) { self.messages = messages; self.before = before }
+    /// Opaque cursor for the previous page (pass it back as `cursor`), from Macs that read transcripts from
+    /// their end; nil at the start of the chat, and from older Macs (use `before`).
+    public var cursor: String?
+    public init(messages: [ChatMessage], before: Int?, cursor: String? = nil) {
+        self.messages = messages; self.before = before; self.cursor = cursor
+    }
+
+    /// Where the previous page starts, whichever kind of cursor this page has.
+    public var older: OlderCursor? { OlderCursor(cursor: cursor, before: before) }
+}
+
+/// How to ask for the page before the messages you have: an opaque cursor (Macs that read transcripts
+/// from their end) or a message index (older Macs, and the only kind older phones know).
+public enum OlderCursor: Hashable, Sendable {
+    case token(String)
+    case index(Int)
+
+    /// The cursor when there is one, else the index; nil when neither (the start of the chat).
+    public init?(cursor: String?, before: Int?) {
+        if let cursor { self = .token(cursor) } else if let before { self = .index(before) } else { return nil }
+    }
 }
 
 // MARK: - Prompts

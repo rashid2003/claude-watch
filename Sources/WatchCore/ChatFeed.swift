@@ -6,13 +6,21 @@ import Foundation
 /// Alongside, it follows what the chat is doing (`work`), including its subagents' transcripts.
 public final class ChatFeed {
     public let url: URL
-    private var offset: UInt64 = 0
-    private var parser = ChatParser()
+    /// Bytes read so far (always just past a newline).
+    var offset: UInt64 = 0
+    var parser = ChatParser()
     private var subagents: SubagentFeeds
 
     public init(url: URL) {
         self.url = url
         subagents = SubagentFeeds(transcript: url)
+    }
+
+    /// A feed that carries on from `offset` with `parser`'s state (built from the lines before it).
+    convenience init(url: URL, offset: UInt64, parser: ChatParser) {
+        self.init(url: url)
+        self.offset = offset
+        self.parser = parser
     }
 
     /// New or updated messages since the last call (the first call returns the whole chat).
@@ -30,6 +38,7 @@ public final class ChatFeed {
         var touched: [Int] = []
         var seen = Set<Int>()
         for line in data[..<lastNL].split(separator: 0x0A) {
+            parser.lineAt = offset + UInt64(line.startIndex - data.startIndex)
             for i in parser.consume(Data(line)) where seen.insert(i).inserted { touched.append(i) }
         }
         offset += UInt64(lastNL - data.startIndex + 1)
@@ -101,10 +110,23 @@ public final class ChatFeed {
 }
 
 /// Incremental transcript → message state. `consume` returns indices of added / changed messages.
+/// A parser can start anywhere in a transcript (at a line start): results whose call came before that
+/// point are kept in `orphans`, and `prepend` joins it to a parser of the lines just before, giving the
+/// same messages a parse of the whole range would.
 struct ChatParser {
     var messages: [ChatMessage] = []
+    /// Byte offset of the line each message came from.
+    var lineStarts: [UInt64] = []
+    /// Offset of the line being consumed (set by the caller; only recorded in `lineStarts`).
+    var lineAt: UInt64 = 0
     var work = WorkTracker()
+    /// False skips live-work bookkeeping (older history only needs messages).
+    var trackWork = true
     private var toolIndex: [String: Int] = [:]   // tool_use id -> message index
+    /// tool_use ids seen in these lines.
+    private var uses = Set<String>()
+    /// The first result for each id that no earlier call in these lines took: it belongs to a call before them.
+    private var orphans: [String: Bool] = [:]
 
     mutating func consume(_ line: Data) -> [Int] {
         guard line.count > 20 else { return [] }
@@ -112,7 +134,7 @@ struct ChatParser {
         let isUser = head.range(of: Data("\"type\":\"user\"".utf8)) != nil
         let isAssistant = head.range(of: Data("\"type\":\"assistant\"".utf8)) != nil
         if !isUser && !isAssistant && WorkTracker.isWorkAttachment(head) {
-            if let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] { work.consume(obj) }
+            if trackWork, let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] { work.consume(obj) }
             return []
         }
         guard isUser || isAssistant || line.count > 2048 else { return [] }
@@ -123,7 +145,7 @@ struct ChatParser {
         }
         guard let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
               let type = obj["type"] as? String, type == "user" || type == "assistant" else { return [] }
-        work.consume(obj)
+        if trackWork { work.consume(obj) }
         if obj["isSidechain"] as? Bool == true || obj["isMeta"] as? Bool == true { return [] }
         let uuid = obj["uuid"] as? String ?? UUID().uuidString
         let at = (obj["timestamp"] as? String).flatMap(TranscriptScanner.parseISO) ?? Date()
@@ -157,7 +179,7 @@ struct ChatParser {
                                     text: ChatFeed.oneLiner(tool: name, input: block["input"] as? [String: Any] ?? [:]),
                                     toolName: name, toolUseId: useId)
                 let i = append(m)
-                if let useId { toolIndex[useId] = i }
+                if let useId { toolIndex[useId] = i; uses.insert(useId) }
                 out.append(i)
             case "tool_result" where type == "user":
                 if let useId = block["tool_use_id"] as? String, let i = resolve(useId, ok: block["is_error"] as? Bool != true) {
@@ -171,11 +193,15 @@ struct ChatParser {
 
     private mutating func append(_ m: ChatMessage) -> Int {
         messages.append(m)
+        lineStarts.append(lineAt)
         return messages.count - 1
     }
 
     private mutating func resolve(_ useId: String, ok: Bool) -> Int? {
-        guard let i = toolIndex.removeValue(forKey: useId) else { return nil }
+        guard let i = toolIndex.removeValue(forKey: useId) else {
+            if !uses.contains(useId), orphans[useId] == nil { orphans[useId] = ok }
+            return nil
+        }
         messages[i].toolOK = ok
         return i
     }
@@ -183,8 +209,27 @@ struct ChatParser {
     private mutating func rawToolResult(_ line: Data) -> [Int] {
         guard let id = TranscriptScanner.toolUseId(inRaw: line) else { return [] }
         let isError = line.range(of: Data("\"is_error\":true".utf8)) != nil
-        work.result(id: id, isError: isError, at: TranscriptScanner.timestamp(inRaw: line) ?? Date())
+        if trackWork { work.result(id: id, isError: isError, at: TranscriptScanner.timestamp(inRaw: line) ?? Date()) }
         return resolve(id, ok: !isError).map { [$0] } ?? []
+    }
+
+    /// Puts `older` (a parser of the lines just before these) in front: its calls take their results
+    /// from these lines, and calls still waiting carry on waiting. Live work stays this parser's.
+    mutating func prepend(_ older: ChatParser) {
+        var front = older.messages
+        var waiting: [String: Int] = [:]
+        for (id, i) in older.toolIndex {
+            if let ok = orphans[id] { front[i].toolOK = ok }
+            else if !uses.contains(id) { waiting[id] = i }   // a later call with this id would take over
+        }
+        var joined = older.orphans
+        for (id, ok) in orphans where joined[id] == nil && !older.uses.contains(id) { joined[id] = ok }
+        orphans = joined
+        uses.formUnion(older.uses)
+        let n = front.count
+        toolIndex = toolIndex.mapValues { $0 + n }.merging(waiting) { newer, _ in newer }
+        messages = front + messages
+        lineStarts = older.lineStarts + lineStarts
     }
 
     /// What to show for a user text entry; nil for injected context.
@@ -199,41 +244,5 @@ struct ChatParser {
             return (String(cmd) + (args.isEmpty ? "" : " " + args))
         }
         return t
-    }
-}
-
-/// Parsed transcripts kept between opens, so reopening a chat (or paging back) only reads what was
-/// appended since. Least recently used chats are dropped past `capacity`.
-public final class TranscriptCache: @unchecked Sendable {
-    private let lock = NSLock()
-    private var feeds: [URL: (feed: ChatFeed, used: Date)] = [:]
-    private let capacity: Int
-
-    public init(capacity: Int = 16) { self.capacity = capacity }
-
-    /// The whole chat so far, and a feed that reports what's appended from here on.
-    public func open(_ url: URL) -> (messages: [ChatMessage], feed: ChatFeed) {
-        lock.withLock {
-            let f = caughtUp(url)
-            return (f.all, f.copy())
-        }
-    }
-
-    /// Like `ChatFeed.page`, from the cache.
-    public func page(_ url: URL, before: Int?, limit: Int) -> MessagesPage {
-        let all = lock.withLock { caughtUp(url).all }
-        let end = min(before ?? all.count, all.count)
-        let start = max(0, end - max(1, limit))
-        return MessagesPage(messages: Array(all[start..<end]), before: start > 0 ? start : nil)
-    }
-
-    private func caughtUp(_ url: URL) -> ChatFeed {
-        let f = feeds[url]?.feed ?? ChatFeed(url: url)
-        _ = f.poll()
-        feeds[url] = (f, Date())
-        if feeds.count > capacity, let oldest = feeds.min(by: { $0.value.used < $1.value.used })?.key {
-            feeds[oldest] = nil
-        }
-        return f
     }
 }
