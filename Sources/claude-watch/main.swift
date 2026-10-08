@@ -135,6 +135,7 @@ func render(_ snap: Snapshot, width: Int, detailed: Bool = true) -> String {
         for s in Array(shown) + Array(idle) {
             let folder = (s.info.cwd as NSString).lastPathComponent
             let lhs = "  " + A.clay("▸") + " " + A.trunc(s.info.title, max(10, w - 44)) + A.dim(" · " + A.trunc(folder, 18))
+                + (s.info.isTerminalChat ? A.dim(" · terminal") : "")
             let rhs = activityLabel(s.activity) + (s.tasks.isEmpty ? "" : "  " + taskSummary(s.tasks))
             out.append(A.pad(lhs, w - A.visibleWidth(rhs)) + rhs)
             if let t = s.tasks.first(where: { $0.status == .in_progress }) {
@@ -181,6 +182,7 @@ func usage() -> Never {
       claude-watch mode <profile> <ui|cli|off>
       claude-watch set-token <profile> store a `claude setup-token` token for CLI retries
       claude-watch profiles            list discovered profiles
+      claude-watch terminal            chats run with `claude` in a terminal, the CLI's account and the prompt hook
       claude-watch move <chat> --to <profile>[:<org>] [--from <profile>] [--now [--force]]
                                        move a chat (id or title words) to another window
       claude-watch moves [--undo <id> [--now] | --cancel <id> | --now]
@@ -263,6 +265,31 @@ case "profiles":
     for p in ProfileDiscovery.discover(config: Config.load()) {
         print("\(A.pad(A.bold(p.id), 14)) \(A.pad(p.name, 22)) \(A.dim(p.dataDir.path))"
               + (TokenStore.get(p.id) != nil ? A.green("  cli token ✓") : ""))
+    }
+
+case "terminal":
+    // Read-only: what Session Watch sees of Claude Code sessions run in a terminal.
+    let index = TerminalSessionIndex()
+    let registry = index.registry()
+    let live = index.liveEntries()
+    let account = CLIAccount.read()
+    print(A.bold("CLI account  ") + (account.map { ($0.email ?? "?") + A.dim("  " + $0.identity) } ?? A.dim("not signed in")))
+    print(A.bold("Prompt hook  ") + (PromptHookInstaller.isInstalled(settings: Paths.claudeSettings)
+                                     ? A.green("installed") : A.dim("off")) + A.dim("  " + Paths.claudeSettings.path))
+    print(A.bold("Registry     ") + "\(registry.count) running session\(registry.count == 1 ? "" : "s") · "
+          + "\(registry.filter(\.isDesktop).count) desktop · \(live.count) terminal")
+    let cfg = Config.load()
+    let sessionIndex = SessionIndex()
+    let desktopIds = Set(ProfileDiscovery.discover(config: cfg).flatMap { sessionIndex.sessions(for: $0) }
+        .flatMap { s in s.priorCliSessionIds + [s.cliSessionId].compactMap { $0 } })
+    let chats = index.sessions(excluding: desktopIds, live: live, accountUuid: account?.identity ?? Profile.terminalId)
+    print("")
+    if chats.isEmpty { print(A.dim("No terminal chats in the last 7 days.")) }
+    let w = min(termWidth(), 110)
+    for s in chats {
+        let state = s.openInTerminal == true ? A.green("open") : A.dim(Fmt.ago(s.lastActivityAt))
+        let lhs = "  " + A.clay("▸") + " " + A.trunc(s.title, max(10, w - 60)) + A.dim(" · " + A.trunc((s.cwd as NSString).lastPathComponent, 18))
+        print(A.pad(lhs, w - 48) + A.pad(state, 10) + A.dim(s.id))
     }
 
 case "queue":
