@@ -62,6 +62,53 @@ struct SettingsView: View {
             }
 
             Section {
+                number("Disk warning below", bind(\.system.diskWarnGB, clamp: { min(2000, max(2, $0)) }), unit: "GB")
+                number("Disk critical below", bind(\.system.diskCriticalGB, clamp: { min(cfg.system.diskWarnGB - 1, max(1, $0)) }), unit: "GB")
+                Toggle("Act automatically when critical", isOn: bind(\.system.auto.enabled))
+                Group {
+                    number("After critical for", bind(\.system.auto.afterSeconds, clamp: { min(3600, max(30, $0)) }), unit: "s")
+                    Toggle("Close idle Claude windows", isOn: bind(\.system.auto.closeIdleClaude))
+                    LabeledContent("Quit these apps") {
+                        VStack(alignment: .trailing, spacing: 4) {
+                            ForEach(cfg.system.auto.quitApps, id: \.self) { id in
+                                HStack(spacing: 6) {
+                                    Text(appLabel(id))
+                                    Button { model.updateConfig { $0.system.auto.quitApps.removeAll { $0 == id } } } label: {
+                                        Image(systemName: "minus.circle")
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                            }
+                            Menu("Add app") {
+                                ForEach(addableApps, id: \.self) { id in
+                                    Button(appLabel(id)) { model.updateConfig { $0.system.auto.quitApps.append(id) } }
+                                }
+                            }
+                            .fixedSize()
+                            .disabled(addableApps.isEmpty)
+                        }
+                    }
+                    Toggle("Force-quit apps still open after 30 s", isOn: bind(\.system.auto.forceIfStuck))
+                    LabeledContent("When disk is critical, clean") {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            ForEach(DiskCleaner.ids.filter { $0 != "trash" }, id: \.self) { id in
+                                Toggle(DiskCleaner.labels[id] ?? id, isOn: Binding(
+                                    get: { cfg.system.auto.cleanTargets.contains(id) },
+                                    set: { on in model.updateConfig { c in
+                                        c.system.auto.cleanTargets.removeAll { $0 == id }
+                                        if on { c.system.auto.cleanTargets.append(id) }
+                                    } }))
+                            }
+                        }
+                    }
+                }
+                .disabled(!cfg.system.auto.enabled)
+            } header: { header("system health") } footer: {
+                note("Off by default. Session Watch acts only after the Mac has stayed critical for the delay, once per "
+                     + "episode, then tells you (and the iPhone) what it did. Apps are asked to quit like ⌘Q.")
+            }
+
+            Section {
                 Toggle("Enabled", isOn: bind(\.bridgeEnabled))
                 number("Port", bind(\.bridgePort, clamp: { min(65535, max(1024, $0)) }), unit: "", grouping: false)
                 Toggle("Require Tailscale owner", isOn: bind(\.requireTailnetOwner))
@@ -120,6 +167,20 @@ struct SettingsView: View {
     var bridgeNeedsRestart: Bool {
         cfg.bridgeEnabled != model.bridgeAtLaunch.enabled
             || (cfg.bridgeEnabled && cfg.bridgePort != model.bridgeAtLaunch.port)
+    }
+
+    /// Display name for an auto-quit entry: the running app's name, else the bundle or process name.
+    func appLabel(_ id: String) -> String {
+        model.health?.apps.first { $0.id == id }?.name ?? SystemStyle.shortName(id)
+    }
+
+    /// Current top apps not yet in the auto-quit list. Loose processes are added by name (pids change).
+    var addableApps: [String] {
+        let have = Set(cfg.system.auto.quitApps)
+        return (model.health?.apps ?? []).compactMap { a -> String? in
+            if a.id.hasPrefix("claude:") { return nil }
+            return a.id.hasPrefix("pid:") ? a.name : a.id
+        }.filter { !have.contains($0) }
     }
 
     func header(_ t: String) -> some View { Text(t).font(Theme.mono.weight(.semibold)).foregroundStyle(Theme.clay) }

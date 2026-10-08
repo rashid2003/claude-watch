@@ -15,6 +15,7 @@ struct MainWindow: View {
             switch model.section ?? .overview {
             case .overview: OverviewView()
             case .chats: ChatsSection()
+            case .system: SystemPanel()
             case .iphone: ScrollView { PairingWindow(embedded: true) }
             case .settings: SettingsView()
             }
@@ -45,6 +46,7 @@ private struct Sidebar: View {
     }
 
     func badge(_ sec: MainSection) -> Int {
+        if sec == .system { return (model.health?.level ?? .ok) > .ok ? 1 : 0 }
         guard sec == .chats, let s = model.snapshot else { return 0 }
         return s.allChats.filter { s.needsYou($0) }.count
     }
