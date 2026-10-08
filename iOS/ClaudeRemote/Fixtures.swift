@@ -145,4 +145,32 @@ enum Fixtures {
         let t = now.addingTimeInterval(Double(i - 48) * 900)
         return UsageSample(t: t, org: "org-1", fiveHour: Double((i * 7) % 100), weekly: 20 + Double(i) * 0.4)
     }
+
+    static let system: SystemHealth = {
+        let GB: Int64 = 1_000_000_000
+        func app(_ id: String, _ name: String, _ gb: Double, _ cpu: Double, _ n: Int, quit: Bool = true) -> AppUsage {
+            AppUsage(id: id, name: name, rss: Int64(gb * 1e9), cpu: cpu, processes: n, pids: [4000 + Int32(n)],
+                     mainPid: 4000 + Int32(n), canQuit: quit, canKill: true)
+        }
+        let history = (0..<120).map { i -> HealthPoint in
+            let x = Double(i) / 12
+            return HealthPoint(at: now.addingTimeInterval(Double(i - 120) * 5), memUsed: Int64((19 + 2 * sin(x)) * 1e9),
+                               swapUsed: Int64((6.5 + Double(i) / 80) * 1e9), diskFree: 118 * GB - Int64(i) * 20_000_000,
+                               load1: 9 + 4 * sin(x * 1.7))
+        }
+        return SystemHealth(at: now, level: .warn, reasons: ["swap 8.0/10 GB"], pressure: .ok,
+                            memTotal: 26 * GB, memUsed: 21 * GB, memCompressed: 4 * GB, swapUsed: 8 * GB, swapTotal: 10 * GB,
+                            diskFree: 118 * GB, diskTotal: 995 * GB, load1: 11.2, load5: 10.4, cores: 10, thermal: "nominal",
+                            apps: [app("claude:900", "Claude · Personal", 6.4, 140, 41),
+                                   app("/Applications/Docker.app", "Docker", 6.1, 22, 10),
+                                   app("pid:4411", "qemu-system-aarch64", 1.9, 85, 1, quit: false),
+                                   app("/Applications/Google Chrome.app", "Google Chrome", 1.6, 9, 18),
+                                   app("pid:5120", "python3", 0.9, 98, 1, quit: false)],
+                            cleanable: [CleanTarget(id: "derivedData", label: "Xcode DerivedData", bytes: 14_200_000_000),
+                                        CleanTarget(id: "npm", label: "npm cache", bytes: 2_100_000_000),
+                                        CleanTarget(id: "trash", label: "Trash", bytes: 3_400_000_000)],
+                            history: history,
+                            auto: AutoActSummary(enabled: false, afterSeconds: 120, quitApps: ["/Applications/Docker.app"],
+                                                 closeIdleClaude: true, cleanTargets: []))
+    }()
 }

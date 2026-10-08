@@ -139,7 +139,11 @@ struct BottomBar: View {
                 dot(Theme.green)
             }
         case .mac:
-            dot(Theme.color(store.connection))
+            if let l = store.snapshot?.systemLevel, l > .ok, store.connection == .connected {
+                dot(l == .critical ? Theme.red : Theme.yellow)
+            } else {
+                dot(Theme.color(store.connection))
+            }
         }
     }
 

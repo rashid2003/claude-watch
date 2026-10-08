@@ -37,6 +37,9 @@ final class RemoteStore {
     private(set) var messagesLoaded = false
 
     private(set) var jobs: [String: Job] = [:]
+    /// The Mac's resources while a view watches them (`watchSystem`), with up to 30 minutes of history.
+    private(set) var system: SystemHealth?
+    @ObservationIgnored private var watchingSystem = false
     private var pending: [String: RemoteCommand] = [:]    // by requestId
     var toast: Toast?
     var deepLink: DeepLink?
@@ -106,6 +109,8 @@ final class RemoteStore {
         connection = .connected
         messages = Fixtures.messages
         messagesLoaded = true
+        system = Fixtures.system
+        snapshot?.systemLevel = Fixtures.system.level
         olderCursor = nil
         pending = [:]
         jobs = [:]
@@ -128,6 +133,7 @@ final class RemoteStore {
         lastUpdated = nil
         messages = []
         openChatId = nil
+        system = nil
         pending = [:]
         jobs = [:]
         toast = nil
@@ -293,6 +299,9 @@ final class RemoteStore {
         if let id = openChatId {
             Task { try? await s.send(WSClientMessage(type: .subscribe, chatId: id)) }
         }
+        if watchingSystem {
+            Task { try? await s.send(WSClientMessage(type: .watchSystem)) }
+        }
         Task {
             await refreshStatus()
             await registerPushIfNeeded()
@@ -322,8 +331,35 @@ final class RemoteStore {
             messagesLoaded = true
         case .job(let j):
             record(j)
+        case .system(let h):
+            // The first reading after watching carries the full history; later ones add their newest point.
+            if h.history.count > 1 || system == nil {
+                system = h
+            } else {
+                var n = h
+                n.history = Array(((system?.history ?? []) + h.history).suffix(360))
+                system = n
+            }
         case .pong:
             break
+        }
+    }
+
+    // MARK: System health
+
+    func watchSystem() {
+        watchingSystem = true
+        if isPreview { return }
+        if let socket, connection == .connected {
+            Task { try? await socket.send(WSClientMessage(type: .watchSystem)) }
+        }
+    }
+
+    func unwatchSystem() {
+        watchingSystem = false
+        if isPreview { return }
+        if let socket, connection == .connected {
+            Task { try? await socket.send(WSClientMessage(type: .unwatchSystem)) }
         }
     }
 
