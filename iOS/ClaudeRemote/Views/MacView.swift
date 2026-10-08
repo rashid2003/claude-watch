@@ -35,7 +35,9 @@ struct MacView: View {
                             }
                         }
                         kv("seen", store.connection == .connected ? "now" : Fmt.ago(store.lastUpdated, now: ctx.date))
-                        if store.activePath == .relay {
+                        if store.activePath == .relay
+                            || (store.activePath == nil && store.credentials?.relay != nil
+                                && (store.credentials?.via ?? .preferred) != .direct) {
                             kv("via", "relay · end-to-end encrypted")
                         } else if let host = store.credentials?.baseURLs.first {
                             kv("host", "\(host.host() ?? host.absoluteString):\(host.port ?? 7433)")
@@ -171,7 +173,7 @@ struct MacView: View {
 
     /// auto / direct / relay, as a radio list.
     private var connectVia: some View {
-        let current = store.credentials?.via ?? .auto
+        let current = store.credentials?.via ?? .preferred
         return VStack(alignment: .leading, spacing: 0) {
             ForEach(ConnectVia.allCases, id: \.self) { v in
                 Button {
@@ -198,9 +200,9 @@ struct MacView: View {
 
     private static func viaNote(_ v: ConnectVia) -> String {
         switch v {
-        case .auto: "tailscale first, else relay"
-        case .direct: "tailscale / same network"
-        case .relay: "anywhere, encrypted"
+        case .relay: "anywhere, encrypted (default)"
+        case .auto: "relay first, else tailscale"
+        case .direct: "tailscale only"
         }
     }
 
