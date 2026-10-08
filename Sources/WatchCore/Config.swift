@@ -47,6 +47,53 @@ public struct ProfileConfig: Codable, Sendable, Equatable {
     }
 }
 
+public struct SystemConfig: Codable, Sendable, Equatable {
+    public var diskWarnGB: Double = 50
+    public var diskCriticalGB: Double = 20
+    public var auto = AutoActConfig()
+
+    public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = SystemConfig()
+        diskWarnGB = try c.decodeIfPresent(Double.self, forKey: .diskWarnGB) ?? d.diskWarnGB
+        diskCriticalGB = try c.decodeIfPresent(Double.self, forKey: .diskCriticalGB) ?? d.diskCriticalGB
+        auto = try c.decodeIfPresent(AutoActConfig.self, forKey: .auto) ?? d.auto
+    }
+}
+
+/// What Session Watch does on its own once the Mac has stayed critical for `afterSeconds`. Off by default.
+public struct AutoActConfig: Codable, Sendable, Equatable {
+    public var enabled = false
+    public var afterSeconds = 120
+    /// `AppUsage.id` (bundle path) or a process name (for loose processes, whose pids change).
+    public var quitApps: [String] = []
+    /// SIGKILL apps still running 30 s after the polite quit.
+    public var forceIfStuck = false
+    public var closeIdleClaude = false
+    /// Cleaned only when disk is a critical signal. Never "trash".
+    public var cleanTargets: [String] = []
+
+    public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = AutoActConfig()
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
+        afterSeconds = try c.decodeIfPresent(Int.self, forKey: .afterSeconds) ?? d.afterSeconds
+        quitApps = try c.decodeIfPresent([String].self, forKey: .quitApps) ?? d.quitApps
+        forceIfStuck = try c.decodeIfPresent(Bool.self, forKey: .forceIfStuck) ?? d.forceIfStuck
+        closeIdleClaude = try c.decodeIfPresent(Bool.self, forKey: .closeIdleClaude) ?? d.closeIdleClaude
+        cleanTargets = (try c.decodeIfPresent([String].self, forKey: .cleanTargets) ?? d.cleanTargets).filter { $0 != "trash" }
+    }
+
+    public var summary: AutoActSummary {
+        AutoActSummary(enabled: enabled, afterSeconds: afterSeconds, quitApps: quitApps,
+                       closeIdleClaude: closeIdleClaude, cleanTargets: cleanTargets)
+    }
+}
+
 public struct Config: Codable, Sendable, Equatable {
     public var pollSeconds: Double = 15
     public var defaultRetryMode: RetryMode = .ui
@@ -77,6 +124,8 @@ public struct Config: Codable, Sendable, Equatable {
     /// Mac app appearance: the menu bar item and the Dock icon (at least one stays on).
     public var showInMenuBar: Bool = true
     public var showInDock: Bool = true
+    /// System health: disk thresholds and the opt-in auto-act.
+    public var system = SystemConfig()
 
     public init() {}
 
@@ -103,6 +152,7 @@ public struct Config: Codable, Sendable, Equatable {
         relayURL = try c.decodeIfPresent(String.self, forKey: .relayURL) ?? d.relayURL
         showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .showInMenuBar) ?? d.showInMenuBar
         showInDock = try c.decodeIfPresent(Bool.self, forKey: .showInDock) ?? d.showInDock
+        system = try c.decodeIfPresent(SystemConfig.self, forKey: .system) ?? d.system
     }
 
     public func retryMode(for profileId: String) -> RetryMode {
