@@ -34,7 +34,8 @@ final class RemoteStore {
     // The chat on screen.
     private(set) var openChatId: String?
     private(set) var messages: [ChatMessage] = []
-    private(set) var olderCursor: Int?
+    /// Where the page before `messages` starts; nil at the start of the chat.
+    private(set) var olderCursor: OlderCursor?
     private(set) var loadingOlder = false
     private(set) var messagesLoaded = false
     /// The transcript on screen came from the disk cache and the Mac's copy hasn't arrived yet.
@@ -324,7 +325,7 @@ final class RemoteStore {
         lastError = nil
         if let client { Task { activePath = await client.path } }
         if let id = openChatId {
-            Task { try? await s.send(WSClientMessage(type: .subscribe, chatId: id)) }
+            Task { try? await s.send(WSClientMessage(type: .subscribe, chatId: id, cursors: true)) }
         }
         if watchingSystem {
             Task { try? await s.send(WSClientMessage(type: .watchSystem)) }
@@ -347,11 +348,11 @@ final class RemoteStore {
                 let at = lastUpdated ?? Date()
                 Task.detached(priority: .utility) { SnapshotCache.save(s, receivedAt: at) }
             }
-        case .messages(let chatId, let msgs, let reset, let before):
+        case .messages(let chatId, let msgs, let reset, let before, let cursor):
             guard chatId == openChatId else { return }
             if reset {
                 messages = msgs
-                olderCursor = before
+                olderCursor = OlderCursor(cursor: cursor, before: before)   // older Macs send only `before`
                 rebuildIndex()
                 messagesStale = false
             } else {
@@ -406,7 +407,7 @@ final class RemoteStore {
         cacheSave?.cancel()
         if let cached = MessageCache.load(id) {
             messages = cached.messages
-            olderCursor = cached.before
+            olderCursor = cached.older
             messagesLoaded = true
             messagesStale = true
         } else {
@@ -417,7 +418,7 @@ final class RemoteStore {
         }
         rebuildIndex()
         if let socket, connection == .connected {
-            Task { try? await socket.send(WSClientMessage(type: .subscribe, chatId: id)) }
+            Task { try? await socket.send(WSClientMessage(type: .subscribe, chatId: id, cursors: true)) }
         }
     }
 
@@ -435,11 +436,11 @@ final class RemoteStore {
         loadingOlder = true
         defer { loadingOlder = false }
         do {
-            let page = try await client.messages(chatId: id, before: cursor, limit: 50)
+            let page = try await client.messages(chatId: id, older: cursor, limit: 50)
             guard id == openChatId else { return }
             let fresh = page.messages.filter { messageIndex[$0.id] == nil }
             messages.insert(contentsOf: fresh, at: 0)
-            olderCursor = page.before
+            olderCursor = page.older
             rebuildIndex()
         } catch {
             show(error)
@@ -454,7 +455,7 @@ final class RemoteStore {
         cacheSave = Task.detached(priority: .utility) {
             if seconds > 0 { try? await Task.sleep(for: .seconds(seconds)) }
             guard !Task.isCancelled else { return }
-            MessageCache.save(id, messages: msgs, before: cursor)
+            MessageCache.save(id, messages: msgs, older: cursor)
         }
     }
 
@@ -468,9 +469,9 @@ final class RemoteStore {
             guard let client, connection == .connected else { return }
             let cachedAt = await Task.detached(priority: .utility) { MessageCache.load(s.id)?.savedAt }.value
             if let cachedAt, cachedAt >= s.info.lastActivityAt { continue }
-            guard let page = try? await client.messages(chatId: s.id, before: nil, limit: 200) else { continue }
+            guard let page = try? await client.messages(chatId: s.id, older: nil, limit: 200) else { continue }
             let id = s.id
-            await Task.detached(priority: .utility) { MessageCache.save(id, messages: page.messages, before: page.before) }.value
+            await Task.detached(priority: .utility) { MessageCache.save(id, messages: page.messages, older: page.older) }.value
         }
     }
 

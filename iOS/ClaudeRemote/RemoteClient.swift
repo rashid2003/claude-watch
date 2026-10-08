@@ -102,9 +102,15 @@ actor RemoteClient {
     func status() async throws -> BridgeStatus { try await get("v1/status") }
     func snapshot() async throws -> Snapshot { try await get("v1/snapshot") }
 
-    func messages(chatId: String, before: Int?, limit: Int = 50) async throws -> MessagesPage {
+    /// The page before `older` (nil = the newest). Asks by cursor (an empty one for the newest page), which
+    /// newer Macs answer from the end of the transcript; older Macs ignore it and answer by index (`before`).
+    func messages(chatId: String, older: OlderCursor?, limit: Int = 50) async throws -> MessagesPage {
         var q = [URLQueryItem(name: "limit", value: String(limit))]
-        if let before { q.append(URLQueryItem(name: "before", value: String(before))) }
+        switch older {
+        case .token(let c): q.append(URLQueryItem(name: "cursor", value: c))
+        case .index(let i): q.append(URLQueryItem(name: "before", value: String(i)))
+        case nil: q.append(URLQueryItem(name: "cursor", value: ""))
+        }
         return try await get("v1/chats/\(chatId)/messages", query: q)
     }
 
