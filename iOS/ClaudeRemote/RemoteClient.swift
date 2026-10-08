@@ -113,6 +113,11 @@ actor RemoteClient {
         try await get("v1/folders", query: [URLQueryItem(name: "profile", value: profileId)])
     }
 
+    /// Whether a typed folder exists and is trusted. Older Macs answer 404.
+    func checkFolder(_ path: String) async throws -> FolderCheck {
+        try await get("v1/folders/check", query: [URLQueryItem(name: "path", value: path)])
+    }
+
     func usage(profileId: String) async throws -> [UsageSample] {
         try await get("v1/accounts/\(profileId)/usage")
     }

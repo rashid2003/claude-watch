@@ -157,9 +157,9 @@ enum Fixtures {
     ]
 
     static let folders: [FolderSuggestion] = [
-        FolderSuggestion(cwd: "/Users/rashid/Development/claude-watch", lastUsedAt: now.addingTimeInterval(-300)),
-        FolderSuggestion(cwd: "/Users/rashid/Development/infra", lastUsedAt: now.addingTimeInterval(-7200)),
-        FolderSuggestion(cwd: "/Users/rashid/Sites/lajward", lastUsedAt: now.addingTimeInterval(-90000)),
+        FolderSuggestion(cwd: "/Users/rashid/Development/claude-watch", lastUsedAt: now.addingTimeInterval(-300), trusted: true),
+        FolderSuggestion(cwd: "/Users/rashid/Development/infra", lastUsedAt: now.addingTimeInterval(-7200), trusted: true),
+        FolderSuggestion(cwd: "/Users/rashid/Sites/lajward", lastUsedAt: now.addingTimeInterval(-90000), trusted: false),
     ]
 
     static let usage: [UsageSample] = (0..<48).map { i in

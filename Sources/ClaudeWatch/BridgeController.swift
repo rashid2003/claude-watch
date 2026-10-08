@@ -313,9 +313,17 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
                 best[info.cwd] = max(best[info.cwd] ?? .distantPast, info.lastActivityAt)
             }
         }
+        let accepted = WorkspaceTrust.acceptedFolders()
         return best.filter { FileManager.default.fileExists(atPath: $0.key) }
-            .map { FolderSuggestion(cwd: $0.key, lastUsedAt: $0.value) }
+            .map { FolderSuggestion(cwd: $0.key, lastUsedAt: $0.value, trusted: WorkspaceTrust.isTrusted($0.key, accepted: accepted)) }
             .sorted { $0.lastUsedAt > $1.lastUsedAt }.prefix(40).map { $0 }
+    }
+
+    func checkFolder(_ path: String) -> FolderCheck? {
+        let p = (path.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).expandingTildeInPath
+        var dir: ObjCBool = false
+        let exists = p.hasPrefix("/") && FileManager.default.fileExists(atPath: p, isDirectory: &dir) && dir.boolValue
+        return FolderCheck(path: p, exists: exists, trusted: exists && WorkspaceTrust.isTrusted(p))
     }
 
     func usage(profileId: String) -> [UsageSample] {
@@ -337,10 +345,11 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             guard snapshot()?.prompts.contains(where: { $0.id == pid }) == true else { return (409, "That prompt is no longer pending") }
         case .stop(let id):
             guard session(id) != nil else { return (404, "That chat isn't listed on the Mac any more") }
-        case .newChat(let p, let cwd, let prompt):
+        case .newChat(let p, let cwd, let prompt, let trust):
             guard profile(p) != nil else { return (404, "Unknown account") }
             guard FileManager.default.fileExists(atPath: cwd) else { return (400, "No such folder on the Mac: \(cwd)") }
             if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return (400, "Write a prompt first") }
+            if !trust && !WorkspaceTrust.isTrusted(cwd) { return (409, DesktopActions.untrustedMessage) }
         case .retry(let item), .cancelRetry(let item):
             guard lock.withLock({ latest })?.queue.contains(where: { $0.id == item }) == true else { return (404, "Not in the retry queue") }
         case .quitApp(let id):
@@ -453,9 +462,11 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             guard let s = session(id), let p = profile(s.info.profileId) else { return (.failed, "Chat not found") }
             return result(DesktopActions.stop(session: s.info, profile: p))
 
-        case .newChat(let pid, let cwd, let prompt):
+        case .newChat(let pid, let cwd, let prompt, let trust):
             guard let p = profile(pid) else { return (.failed, "Unknown account") }
-            return result(DesktopActions.newChat(profile: p, cwd: cwd, prompt: prompt))
+            let r = DesktopActions.newChat(profile: p, cwd: cwd, prompt: prompt, allowTrust: trust)
+            monitor.refreshNow()
+            return result(r)
 
         case .retry(let itemId):
             guard lock.withLock({ latest })?.queue.contains(where: { $0.id == itemId }) == true else { return (.failed, "Not in the queue") }

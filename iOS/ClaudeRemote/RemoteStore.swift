@@ -583,6 +583,15 @@ final class RemoteStore {
         return (try? await client?.folders(profileId: profileId)) ?? []
     }
 
+    /// nil when the Mac can't say (older Mac, offline).
+    func checkFolder(_ path: String) async -> FolderCheck? {
+        if isPreview {
+            let known = Fixtures.folders.contains { $0.cwd == path }
+            return FolderCheck(path: path, exists: known || path.hasPrefix("/Users/"), trusted: known)
+        }
+        return try? await client?.checkFolder(path)
+    }
+
     func usage(profileId: String) async throws -> [UsageSample] {
         if isPreview { return Fixtures.usage }
         guard let client else { return [] }
