@@ -50,6 +50,7 @@ extension Snapshot {
 
     /// Where a chat could be moved: every known location except the one its record lives in now.
     func moveDestinations(for s: SessionStatus) -> [ChatLocation] {
+        if s.info.isTerminalChat { return [] }   // terminal chats have no desktop record to move
         let current = s.info.profileId + "/" + s.info.folder
         return locations.filter { $0.id != current }
     }

@@ -39,6 +39,27 @@ final class WireTests: XCTestCase {
         XCTAssertTrue(s.moves.isEmpty)
     }
 
+    func testTerminalFieldsTravelAndOldPayloadsDecode() throws {
+        var snap = sampleSnapshot()
+        // Older Macs: no terminal keys at all.
+        let old = try WireCoder.encoder.encode(snap)
+        XCTAssertFalse(String(decoding: old, as: UTF8.self).contains("isTerminal"))
+        let decodedOld = try WireCoder.decoder.decode(Snapshot.self, from: old)
+        XCTAssertNil(decodedOld.accounts[0].sessions[0].info.isTerminal)
+        XCTAssertFalse(decodedOld.accounts[0].sessions[0].info.isTerminalChat)
+        XCTAssertNil(decodedOld.prompts[0].viewOnly)
+
+        snap.accounts[0].sessions[0].info.isTerminal = true
+        snap.accounts[0].sessions[0].info.openInTerminal = true
+        snap.prompts[0].viewOnly = true
+        let s = try roundTrip(snap)
+        XCTAssertEqual(s.accounts[0].sessions[0].info.isTerminal, true)
+        XCTAssertEqual(s.accounts[0].sessions[0].info.openInTerminal, true)
+        XCTAssertTrue(s.accounts[0].sessions[0].info.isTerminalChat)
+        XCTAssertEqual(s.prompts[0].viewOnly, true)
+        XCTAssertTrue(Profile(id: Profile.terminalId, name: "Terminal", dataDir: URL(fileURLWithPath: "/tmp")).isTerminal)
+    }
+
     func testServerMessages() throws {
         let job = Job(id: "j1", requestId: "r1", command: "reply", target: "local_1", status: .done, at: t)
         let msg = ChatMessage(id: "u1", kind: .tool, at: t, text: "Ran swift build", toolName: "Bash", toolOK: true)

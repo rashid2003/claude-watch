@@ -65,5 +65,10 @@ final class PusherTests: XCTestCase {
         let q = PushNote.prompt(prompt("AskUserQuestion", always: false, kind: .question), account: "W")
         XCTAssertEqual(q.category, PushCategory.chat, "questions are answered on the Mac")
         XCTAssertEqual(q.body, "swift build")
+        var term = prompt("Bash", always: false)
+        term.viewOnly = true
+        let t = PushNote.prompt(term, account: "W")
+        XCTAssertEqual(t.category, PushCategory.chat, "a terminal's view-only prompt has no Allow / Deny")
+        XCTAssertTrue(t.body.hasSuffix("answer in the terminal"))
     }
 }

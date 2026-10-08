@@ -45,6 +45,7 @@ public enum ClaudeProcesses {
     }
 
     public static func pid(for profile: Profile, in instances: [Instance]) -> Int32? {
+        if profile.isTerminal { return nil }   // no desktop window
         if profile.isDefault { return instances.first(where: { $0.dataDir == nil })?.pid }
         let want = canonical(profile.dataDir.path)
         return instances.first(where: { $0.dataDir.map { canonical($0) == want } ?? false })?.pid

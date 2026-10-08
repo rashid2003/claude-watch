@@ -26,7 +26,8 @@ struct NewChatView: View {
     /// The desktop app cuts a linked prompt here.
     static let promptLimit = 14_000
 
-    private var accounts: [AccountStatus] { store.snapshot?.accounts ?? [] }
+    /// Accounts with a desktop window (terminal chats are started in a terminal).
+    private var accounts: [AccountStatus] { (store.snapshot?.accounts ?? []).filter { !$0.profile.isTerminal } }
     private var folder: String { cwd.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var promptText: String { prompt.trimmingCharacters(in: .whitespacesAndNewlines) }
 

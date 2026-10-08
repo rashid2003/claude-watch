@@ -150,6 +150,19 @@ struct VersionBanner: View {
 
 /// Terminal-style placeholder: "○ no chats yet", with an optional hint line under it.
 /// `busy` swaps the glyph for the working spinner (e.g. while waiting for the first snapshot).
+/// Marks a chat run with `claude` in a terminal on the Mac (not in a desktop window).
+struct TerminalTag: View {
+    var body: some View {
+        Text("terminal")
+            .font(Theme.monoTiny)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Theme.hairline))
+            .fixedSize()
+            .accessibilityLabel("Terminal chat")
+    }
+}
+
 struct EmptyNote: View {
     let text: String
     var hint: String?

@@ -214,6 +214,9 @@ public final class BridgeServer: @unchecked Sendable {
         }
     }
 
+    /// Some phone has a live connection right now.
+    public var hasSocketClients: Bool { queue.sync { conns.values.contains { $0.isSocket } } }
+
     /// Chats some connected phone is subscribed to right now.
     public var watchedChats: Set<String> {
         queue.sync { Set(conns.values.compactMap { $0.isSocket ? $0.feed?.0 : nil }) }

@@ -56,7 +56,8 @@ public struct PushNote: Sendable {
     /// A pending prompt. Carries `chatId` and `promptId` so the phone can answer from the notification.
     public static func prompt(_ p: PendingPrompt, account: String) -> PushNote {
         PushNote(category: PushCategory.of(p), title: account + " · " + p.chatTitle,
-                 body: p.kind == .question ? p.summary : "\(p.toolName): \(p.summary)",
+                 body: p.kind == .question ? p.summary
+                     : "\(p.toolName): \(p.summary)" + (p.viewOnly == true ? " · answer in the terminal" : ""),
                  threadId: p.chatId, collapseId: "prompt-" + p.chatId,
                  userInfo: ["chatId": p.chatId, "promptId": p.id, "profileId": p.profileId])
     }

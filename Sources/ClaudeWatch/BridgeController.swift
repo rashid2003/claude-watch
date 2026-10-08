@@ -73,6 +73,11 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             return (s.info.title, s.info.profileId)
         }
         broker.onChange = { [weak self] _ in self?.republish() }
+        // Terminal prompt hook: only hold the terminal's request while a phone can actually be asked.
+        broker.holdHook = { [weak self] id in
+            guard let self, self.session(id)?.info.isTerminalChat == true else { return false }
+            return self.phoneReachable
+        }
         pusher.onInvalidToken = { [weak self] id in self?.server.devices.update(id) { $0.apnsToken = nil } }
         runner.onExit = { [weak self] sid, _ in self?.broker.clear(chatId: sid); self?.monitor.refreshNow() }
     }
@@ -131,9 +136,17 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         ]
     }
 
+    /// A paired phone is connected now, or can be reached with a push.
+    private var phoneReachable: Bool {
+        let devices = server.devices.all
+        guard !devices.isEmpty else { return false }
+        return server.hasSocketClients || (pusher.isConfigured && devices.contains { $0.apnsToken != nil && $0.wants(.prompt) })
+    }
+
     // MARK: Snapshot fan-out
 
     func update(_ s: Snapshot) {
+        releaseStaleHookPrompts(s)
         let merged = merge(s)
         lock.withLock { latest = s }
         server.publish(snapshot: merged)
@@ -177,6 +190,16 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         driveLiveActivities(merged)
     }
 
+    /// A terminal hook prompt goes back to the terminal once it was answered there (the transcript
+    /// moved on) or the terminal session closed.
+    private func releaseStaleHookPrompts(_ s: Snapshot) {
+        for p in broker.prompts where PromptBroker.isHook(p.id) {
+            guard let sess = s.sessions.first(where: { $0.id == p.chatId }) else { broker.release(id: p.id); continue }
+            let movedOn = sess.tail.lastAt.map { $0 > p.at.addingTimeInterval(1) } ?? false
+            if movedOn || sess.info.openInTerminal != true { broker.release(id: p.id) }
+        }
+    }
+
     /// Adds headless prompts; a chat with one counts as waiting.
     private func merge(_ s: Snapshot) -> Snapshot {
         var m = s
@@ -185,6 +208,9 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         m.drafts = drafts.all
         let extra = broker.prompts
         guard !extra.isEmpty else { return m }
+        // A terminal prompt the phone can answer (through the hook) replaces its view-only copy.
+        let answerable = Set(extra.map(\.chatId))
+        m.prompts.removeAll { $0.viewOnly == true && answerable.contains($0.chatId) }
         m.prompts += extra
         let waiting = Set(extra.map(\.chatId))
         for a in m.accounts.indices {
@@ -210,7 +236,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         guard !watched.isEmpty else { return draftReader.reset() }
         var changed = false
         for id in watched.sorted() {
-            guard let s = session(id), let p = profile(s.info.profileId),
+            guard let s = session(id), !s.info.isTerminalChat, let p = profile(s.info.profileId),
                   let text = draftReader.read(session: s.info, profile: p) else { continue }
             if drafts.observeDesktop(chatId: id, text: text) { changed = true }
         }
@@ -340,13 +366,19 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     func check(_ command: BridgeCommand) -> (Int, String)? {
         switch command {
         case .reply(let id, _):
-            guard session(id) != nil else { return (404, "That chat isn't listed on the Mac any more") }
+            guard let s = session(id) else { return (404, "That chat isn't listed on the Mac any more") }
+            if let e = HeadlessRunner.terminalGuard(s.info) { return (409, e.message) }
         case .answer(_, let pid, _):
-            guard snapshot()?.prompts.contains(where: { $0.id == pid }) == true else { return (409, "That prompt is no longer pending") }
+            guard let p = snapshot()?.prompts.first(where: { $0.id == pid }) else { return (409, "That prompt is no longer pending") }
+            if p.viewOnly == true { return (409, Self.answerInTerminal) }
         case .stop(let id):
-            guard session(id) != nil else { return (404, "That chat isn't listed on the Mac any more") }
+            guard let s = session(id) else { return (404, "That chat isn't listed on the Mac any more") }
+            if s.info.isTerminalChat, !runner.isRunning(sessionId: id) { return (409, "Stop this chat in the terminal on the Mac") }
+        case .move(let id, _):
+            if session(id)?.info.isTerminalChat == true { return (409, "Terminal chats can't be moved to another window") }
         case .newChat(let p, let cwd, let prompt, let trust):
-            guard profile(p) != nil else { return (404, "Unknown account") }
+            guard let prof = profile(p) else { return (404, "Unknown account") }
+            if prof.isTerminal { return (400, "Start terminal chats in a terminal on the Mac") }
             guard FileManager.default.fileExists(atPath: cwd) else { return (400, "No such folder on the Mac: \(cwd)") }
             if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return (400, "Write a prompt first") }
             if !trust && !WorkspaceTrust.isTrusted(cwd) { return (409, DesktopActions.untrustedMessage) }
@@ -393,11 +425,15 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         return s.activity == .working || s.activity == .waiting || runner.isRunning(sessionId: s.id) || recent
     }
 
+    static let answerInTerminal = "Answer this in the terminal on the Mac"
+
     /// Sends a reply now: in the background with the account's CLI token, else typed into the desktop window.
+    /// Terminal chats always go in the background, as whoever the `claude` CLI is signed into.
     private func send(_ text: String, to s: SessionStatus) -> (JobStatus, String?) {
         guard let p = profile(s.info.profileId) else { return (.failed, "Chat not found") }
+        if let e = HeadlessRunner.terminalGuard(s.info) { return (.failed, e.message) }
         lock.withLock { sentAt[s.id] = Date() }
-        if TokenStore.get(p.id) == nil {
+        if !s.info.isTerminalChat, TokenStore.get(p.id) == nil {
             return result(UIRetry.type(message: text, session: s.info, profile: p).map { _ in "Typed into the \(p.name) window" })
         }
         return result(runner.reply(text, session: s.info, profile: p, activity: s.activity)
@@ -427,6 +463,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         switch command {
         case .reply(let id, let text):
             guard let s = session(id) else { return (.failed, "Chat not found") }
+            if let e = HeadlessRunner.terminalGuard(s.info) { return (.failed, e.message) }
             if isBusy(s) || replies.has(chatId: id) {   // behind earlier queued replies too, so order holds
                 replies.add(chatId: id, text: text)
                 republish()
@@ -446,6 +483,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             }
             guard prompt.kind == .permission else { return (.failed, "Answer this question on the Mac") }
             guard let s = session(chatId), let p = profile(s.info.profileId) else { return (.failed, "Chat not found") }
+            if prompt.viewOnly == true || s.info.isTerminalChat { return (.failed, Self.answerInTerminal) }
             let r = DesktopActions.answer(decision: decision, session: s.info, profile: p)
             guard case .success = r else { return result(r) }
             // Pressed: confirm the prompt went away.
@@ -460,10 +498,11 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         case .stop(let id):
             if runner.stop(sessionId: id) { return (.done, "Stopped the background run") }
             guard let s = session(id), let p = profile(s.info.profileId) else { return (.failed, "Chat not found") }
+            if s.info.isTerminalChat { return (.failed, "Stop this chat in the terminal on the Mac") }
             return result(DesktopActions.stop(session: s.info, profile: p))
 
         case .newChat(let pid, let cwd, let prompt, let trust):
-            guard let p = profile(pid) else { return (.failed, "Unknown account") }
+            guard let p = profile(pid), !p.isTerminal else { return (.failed, "Unknown account") }
             let r = DesktopActions.newChat(profile: p, cwd: cwd, prompt: prompt, allowTrust: trust)
             monitor.refreshNow()
             return result(r)
@@ -483,6 +522,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
 
         case .move(let sid, let toId):
             guard let snap = lock.withLock({ latest }), let s = session(sid) else { return (.failed, "Chat not found") }
+            if s.info.isTerminalChat { return (.failed, "Terminal chats can't be moved to another window") }
             if s.activity == .working || s.activity == .waiting { return (.failed, "Can't move a chat while it's working or waiting on you") }
             let parts = s.info.folder.split(separator: "/").map(String.init)
             guard parts.count == 2, let to = snap.locations.first(where: { $0.id == toId }) else { return (.failed, "Unknown destination") }

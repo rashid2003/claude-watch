@@ -9,6 +9,17 @@ public enum Paths {
         return home.appendingPathComponent(".claude")
     }
     public static var projects: URL { claudeHome.appendingPathComponent("projects") }
+    /// Claude Code's registry of running sessions: `<pid>.json` per process.
+    public static var sessionRegistry: URL { claudeHome.appendingPathComponent("sessions") }
+    /// Claude Code's user settings (hooks live here).
+    public static var claudeSettings: URL { claudeHome.appendingPathComponent("settings.json") }
+    /// The CLI's global state, including the signed-in account (`oauthAccount`).
+    public static var claudeGlobalConfig: URL {
+        if let dir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"], !dir.isEmpty {
+            return URL(fileURLWithPath: dir).appendingPathComponent(".claude.json")
+        }
+        return home.appendingPathComponent(".claude.json")
+    }
     public static var tasks: URL { claudeHome.appendingPathComponent("tasks") }
     public static var defaultProfile: URL { home.appendingPathComponent("Library/Application Support/Claude") }
     public static var profilesRoot: URL { home.appendingPathComponent("Claude-Profiles") }

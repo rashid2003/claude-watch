@@ -63,13 +63,16 @@ public struct PendingPrompt: Codable, Hashable, Sendable, Identifiable {
     public var kind: Kind
     public var at: Date
     public var canAllowAlways: Bool
+    /// Shown for information only: it can't be answered from the phone (a terminal chat's prompt
+    /// without the prompt hook). Nil from older Macs.
+    public var viewOnly: Bool? = nil
 
     public init(id: String, chatId: String, profileId: String, chatTitle: String, toolName: String,
                 summary: String, detail: String? = nil, source: Source, kind: Kind = .permission,
-                at: Date, canAllowAlways: Bool = false) {
+                at: Date, canAllowAlways: Bool = false, viewOnly: Bool? = nil) {
         self.id = id; self.chatId = chatId; self.profileId = profileId; self.chatTitle = chatTitle
         self.toolName = toolName; self.summary = summary; self.detail = detail; self.source = source
-        self.kind = kind; self.at = at; self.canAllowAlways = canAllowAlways
+        self.kind = kind; self.at = at; self.canAllowAlways = canAllowAlways; self.viewOnly = viewOnly
     }
 }
 
@@ -86,9 +89,9 @@ public enum PushCategory {
 
     public static var prompts: [String] { [prompt, promptAlways, promptShell, promptShellAlways] }
 
-    /// Questions are answered on the Mac, so they get the plain chat actions.
+    /// Questions and view-only prompts are answered on the Mac, so they get the plain chat actions.
     public static func of(_ p: PendingPrompt) -> String {
-        guard p.kind == .permission else { return chat }
+        guard p.kind == .permission, p.viewOnly != true else { return chat }
         switch (p.toolName == "Bash", p.canAllowAlways) {
         case (false, false): return prompt
         case (false, true): return promptAlways

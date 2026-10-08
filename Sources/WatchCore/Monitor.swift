@@ -55,6 +55,8 @@ public final class Monitor {
     private var profilesAt: Date = .distantPast
     private var configMtime: Date?
     private let sessionIndex = SessionIndex()
+    private let terminalIndex: TerminalSessionIndex
+    private let cliAccountURL: URL
     private let attribution = Attribution()
     private let scanner = TranscriptScanner()
     private var usageCache: [String: (mtime: Date, samples: [UsageSample])] = [:]
@@ -64,10 +66,14 @@ public final class Monitor {
     private var firstPoll = true
     public let moves = MoveStore()
     private var locations: [ChatLocation] = []
-    /// Desktop chats whose CLI process is running: session id -> pid (updated every poll).
+    /// Chats whose CLI process is running: session id -> pid (updated every poll). Terminal chats
+    /// count while their `claude` process runs.
     public private(set) var liveRunners: [String: Int32] = [:]
 
-    public init(ownEngine: Bool = true) {
+    public init(ownEngine: Bool = true, terminalIndex: TerminalSessionIndex = TerminalSessionIndex(),
+                cliAccountURL: URL = Paths.claudeGlobalConfig) {
+        self.terminalIndex = terminalIndex
+        self.cliAccountURL = cliAccountURL
         _config = Config.load()
         engine = RetryEngine(owner: ownEngine && EngineLock.acquire())
         engine.onEvent = { [weak self] item, msg in self?.onEvent?(.retry(item, msg)) }
@@ -151,7 +157,9 @@ public final class Monitor {
         }
     }
 
-    public func profile(id: String) -> Profile? { profiles.first { $0.id == id } }
+    public func profile(id: String) -> Profile? {
+        id == Profile.terminalId ? .terminal : profiles.first { $0.id == id }
+    }
 
     /// Queues a move; it runs once both windows are closed. Nil if the chat already has one pending.
     public func requestMove(sessionId: String, title: String, from: ChatLocation, to: ChatLocation) -> PendingMove? {
@@ -250,7 +258,24 @@ public final class Monitor {
             if profileAccount[p.id] == nil { profileAccount[p.id] = copies.first?.accountUuid }
             for c in copies { candidates[c.id, default: []].append(c) }
         }
-        scanner.scan(sessions: candidates.values.map { $0[0] }, now: now)
+        // Terminal chats: sessions of the `claude` CLI that no desktop record claims.
+        let desktopIds = Set(candidates.values.flatMap { $0.flatMap { c in c.priorCliSessionIds + [c.cliSessionId].compactMap { $0 } } })
+        let cliAccount = CLIAccount.read(from: cliAccountURL)
+        let terminalLive = terminalIndex.liveEntries()
+        let terminal = terminalIndex.sessions(excluding: desktopIds, live: terminalLive,
+                                              accountUuid: cliAccount?.identity ?? Profile.terminalId, now: now)
+        let terminalIds = Set(terminal.map(\.id))
+        var terminalBusy = Set<String>(), terminalIdle = Set<String>()
+        for e in terminalLive where terminalIds.contains(e.sessionId) {
+            // Interactive processes win over a background `-p` run of the same chat.
+            if liveRunners[e.sessionId] == nil || e.isInteractive { liveRunners[e.sessionId] = e.pid }
+            live.insert(e.sessionId)
+            if e.status == "busy" { terminalBusy.insert(e.sessionId) }
+            if e.status == "idle", e.isInteractive { terminalIdle.insert(e.sessionId) }
+        }
+        if !terminal.isEmpty { profileAccount[Profile.terminalId] = cliAccount?.identity ?? Profile.terminalId }
+
+        scanner.scan(sessions: candidates.values.map { $0[0] } + terminal, now: now)
         let dirOf = Dictionary(profiles.map { ($0.id, std($0.dataDir.path) + "/") }, uniquingKeysWith: { a, _ in a })
         var all: [SessionInfo] = []
         var undecided: [[SessionInfo]] = []
@@ -275,6 +300,7 @@ public final class Monitor {
             chosen.accountUuid = profileAccount[chosen.profileId] ?? chosen.accountUuid
             all.append(chosen)
         }
+        all += terminal
         all.sort { $0.lastActivityAt > $1.lastActivityAt }
         attribution.save()
 
@@ -282,19 +308,15 @@ public final class Monitor {
         for s in all { byAccount[s.accountUuid, default: []].append(s) }
 
         // Profiles signed into the same account are shown as one account.
-        var groups: [(key: String, members: [Profile])] = []
-        for p in profiles {
-            let key = profileAccount[p.id] ?? "profile:" + p.id
-            if let i = groups.firstIndex(where: { $0.key == key }) { groups[i].members.append(p) }
-            else { groups.append((key, [p])) }
-        }
+        let groups = Self.accountGroups(profiles + (terminal.isEmpty ? [] : [Profile.terminal]), accounts: profileAccount)
 
         let moveList = moves.all()
         let arrivals = Self.arrivals(moveList)
         var accounts: [AccountStatus] = []
         var allStatuses: [SessionStatus] = []
         for g in groups {
-            let p = g.members.first { !$0.isDefault } ?? g.members[0]
+            let p = g.members.first { !$0.isDefault && !$0.isTerminal } ?? g.members.first { !$0.isTerminal } ?? g.members[0]
+            let windows = g.members.filter { !$0.isTerminal }
             let memberIds = Set(g.members.map(\.id))
             let accountUuid = g.key.hasPrefix("profile:") ? nil : g.key
             let accountSessions = accountUuid.flatMap { byAccount[$0] } ?? []
@@ -309,7 +331,7 @@ public final class Monitor {
             let hits = allHits.filter { $0.at > lastSuccess }
             // Use whichever member window sampled usage most recently.
             let org = accountUuid?.split(separator: "/").last.map(String.init)
-            let usage = g.members.map { m in samples(for: m).filter { org == nil || $0.org == org } }
+            let usage = windows.map { m in samples(for: m).filter { org == nil || $0.org == org } }
                 .max { ($0.last?.t ?? .distantPast) < ($1.last?.t ?? .distantPast) } ?? []
             let five = Forecaster.forecast(samples: usage, window: .fiveHour, rateLimits: allHits,
                                            tokens: acct.sum, now: now)
@@ -322,8 +344,11 @@ public final class Monitor {
                 var activity = Self.activity(session: s, tail: tail,
                                              transcriptMtime: s.cliSessionId.flatMap(scanner.transcriptURL).flatMap(Self.mtime),
                                              now: now)
-                if activity == .idle, live.contains(s.id), let at = tail.lastAt, now.timeIntervalSince(at) < 1800,
-                   tail.last != .assistantDone { activity = .working }
+                // (Not when a terminal's registry says it's idle, e.g. a turn interrupted with Esc.)
+                if activity == .idle, live.contains(s.id), !terminalIdle.contains(s.id), let at = tail.lastAt,
+                   now.timeIntervalSince(at) < 1800, tail.last != .assistantDone { activity = .working }
+                // The terminal registry says the turn is running (it can be quiet for a while).
+                if activity == .idle, terminalBusy.contains(s.id), tail.last != .rateLimited { activity = .working }
                 // A running tool call with no result, a quiet transcript and no process for it: waiting on you.
                 if let pid = liveRunners[s.id], tail.last == .assistantTool, activity != .failed,
                    let url = s.cliSessionId.flatMap(scanner.transcriptURL), let mtime = Self.mtime(url),
@@ -331,7 +356,10 @@ public final class Monitor {
                     if procs == nil { procs = ProcessTree.all() }
                     let kids = ProcessTree.childStarts(of: [pid], in: procs!)[pid] ?? []
                     if PromptDetector.isWaiting(open, transcriptMtime: mtime, childStarts: kids, now: now) {
-                        prompts.append(PromptDetector.prompt(for: s, tool: open))
+                        var prompt = PromptDetector.prompt(for: s, tool: open)
+                        // A terminal's prompt is answered in the terminal (or through the prompt hook).
+                        if s.isTerminalChat { prompt.viewOnly = true; prompt.canAllowAlways = false }
+                        prompts.append(prompt)
                         activity = .waiting
                     }
                 }
@@ -353,8 +381,10 @@ public final class Monitor {
             }
             allStatuses += statuses
 
-            let pid = ClaudeProcesses.pid(for: p, in: instances)
-                ?? g.members.lazy.compactMap { ClaudeProcesses.pid(for: $0, in: instances) }.first
+            let pid = windows.isEmpty ? nil : ClaudeProcesses.pid(for: p, in: instances)
+                ?? windows.lazy.compactMap { ClaudeProcesses.pid(for: $0, in: instances) }.first
+            // An account with only terminal chats runs while one of its `claude` processes does.
+            let running = pid != nil || (windows.isEmpty && accountSessions.contains { $0.isTerminalChat && live.contains($0.id) })
             let activeHit = hits.filter { ($0.resetsAt ?? .distantPast) > now }.max { ($0.resetsAt ?? now) < ($1.resetsAt ?? now) }
             var limitedUntil = activeHit?.resetsAt
             var kind = activeHit?.kind
@@ -370,12 +400,12 @@ public final class Monitor {
             }
             let isLimited = activeHit != nil || kind != nil
             let working = statuses.contains { $0.activity == .working }
-            let state: AccountState = isLimited ? .limited : working ? .working : (pid != nil ? .free : .offline)
+            let state: AccountState = isLimited ? .limited : working ? .working : (running ? .free : .offline)
 
             accounts.append(AccountStatus(
                 profile: p, memberProfileIds: g.members.map(\.id),
-                alsoOpenIn: g.members.filter { $0.id != p.id }.map(\.name),
-                accountUuid: accountUuid, running: pid != nil, pid: pid, state: state,
+                alsoOpenIn: windows.filter { $0.id != p.id }.map(\.name),
+                accountUuid: accountUuid, running: running, pid: pid, state: state,
                 limitedUntil: limitedUntil, limitKind: isLimited ? kind : nil,
                 fiveHour: five, weekly: week,
                 tokens5h: acct.sum(now.addingTimeInterval(-5 * 3600), now),
@@ -385,7 +415,8 @@ public final class Monitor {
                 retryMode: config.retryMode(for: p.id)))
         }
 
-        engine.update(statuses: allStatuses, accounts: accounts, profiles: profiles,
+        // Terminal chats are never retried: there's no window to type into, and the terminal may be open.
+        engine.update(statuses: allStatuses.filter { !$0.info.isTerminalChat }, accounts: accounts, profiles: profiles,
                       config: config, scanner: scanner, now: now)
         emitTransitions(accounts, now: now)
         firstPoll = false
@@ -395,6 +426,18 @@ public final class Monitor {
                             moves: moveList, locations: locations, profiles: profiles, prompts: prompts)
         snapshot = snap
         onSnapshot?(snap)
+    }
+
+    /// Profiles signed into the same account ("account/org") form one account. The Terminal pseudo
+    /// profile joins the account the `claude` CLI is signed into, or stands alone.
+    static func accountGroups(_ profiles: [Profile], accounts: [String: String]) -> [(key: String, members: [Profile])] {
+        var groups: [(key: String, members: [Profile])] = []
+        for p in profiles {
+            let key = accounts[p.id] ?? "profile:" + p.id
+            if let i = groups.firstIndex(where: { $0.key == key }) { groups[i].members.append(p) }
+            else { groups.append((key, [p])) }
+        }
+        return groups
     }
 
     /// When each chat last landed in another account: the latest finished move per chat whose
