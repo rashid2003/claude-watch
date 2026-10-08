@@ -37,6 +37,8 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
     @Published var configError: String?
     /// The Mac's resources (memory, swap, CPU, disk) and their 30-minute trend.
     @Published var health: SystemHealth?
+    /// Unsent text per chat from the paired phone or the desktop composer (bridge only).
+    @Published var drafts: [String: ChatDraft] = [:]
     let monitor = Monitor(ownEngine: true)
     let system: SystemWatch
     private(set) var bridge: BridgeController?
@@ -63,6 +65,7 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
         if bridgeOn {
             let b = BridgeController(monitor: monitor)
             b.onChange = { [weak self] in self?.bridgeTick += 1 }
+            b.onDrafts = { [weak self] d in self?.drafts = d }
             b.start()
             bridge = b
         }
@@ -461,6 +464,11 @@ struct SessionRow: View {
             if let t = s.tasks.first(where: { $0.status == .in_progress }) {
                 Text("◐ " + (t.activeForm ?? t.subject)).foregroundStyle(.secondary).lineLimit(1).padding(.leading, 14)
             }
+            if let d = phoneDraft {
+                Text("✎ iPhone draft · \(Fmt.ago(d.at)): " + d.text.replacingOccurrences(of: "\n", with: " "))
+                    .foregroundStyle(Theme.clay).lineLimit(1).truncationMode(.tail).padding(.leading, 14)
+                    .help("Typed on the iPhone, not sent yet. Right-click to copy it.")
+            }
         }
         .font(Theme.monoSmall)
         .padding(.vertical, 2).padding(.horizontal, 4)
@@ -469,7 +477,18 @@ struct SessionRow: View {
         .onHover { hover = $0 }
         .onTapGesture(perform: open)
         .help(s.tail.lastRateLimit?.text ?? "Open in Claude")
+        .contextMenu {
+            if let d = phoneDraft {
+                Button("Copy iPhone draft") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(d.text, forType: .string)
+                }
+            }
+        }
     }
+
+    /// Text typed on the phone for this chat and not sent (desktop drafts are already in the Claude window).
+    var phoneDraft: ChatDraft? { model.drafts[s.id].flatMap { $0.source == .phone ? $0 : nil } }
 
     @ViewBuilder var moveMenu: some View {
         let from = model.source(of: s.info)

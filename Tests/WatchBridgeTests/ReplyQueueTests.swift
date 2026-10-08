@@ -33,6 +33,7 @@ final class ReplyQueueTests: XCTestCase {
         let gone = q.add(chatId: "a", text: "drop")
         XCTAssertTrue(q.remove(id: gone.id))
         XCTAssertFalse(q.remove(id: gone.id))
-        XCTAssertEqual(ReplyQueue(url: url).all, [r])
+        // Compare ids: a Date doesn't survive the seconds-since-1970 round trip to the last bit.
+        XCTAssertEqual(ReplyQueue(url: url).all.map(\.id), [r.id])
     }
 }

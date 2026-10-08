@@ -8,6 +8,13 @@ struct ChatView: View {
     let chatId: String
 
     @State private var draft = ""
+    /// Draft sync: the desktop text filled in (while untouched), when the user last edited, what the Mac last got.
+    @State private var prefilled: String?
+    @State private var prefilledAt: Date?
+    @State private var draftAt: Date?
+    @State private var postedDraft = ""
+    @State private var programmatic: String?
+    @State private var draftSave: Task<Void, Never>?
     @State private var tasksExpanded = false
     @State private var atBottom = true
     @State private var moveTarget: ChatLocation?
@@ -375,6 +382,9 @@ struct ChatView: View {
                     .accessibilityLabel("Send")
                 }
             }
+            if let p = prefilled, draft == p, let at = prefilledAt {
+                Text("from Mac · " + Fmt.relativeAgo(at)).font(Theme.monoTiny).foregroundStyle(.secondary).transition(.opacity)
+            }
             if sending {
                 Text(busy ? "queueing…" : "sending…").font(Theme.monoTiny).foregroundStyle(.secondary).transition(.opacity)
             } else if busy, !draft.isEmpty {
@@ -382,6 +392,63 @@ struct ChatView: View {
             }
         }
         .animation(.snappy, value: sending)
+        .onAppear(perform: restoreDraft)
+        .onDisappear { saveDraft(post: true) }
+        .onChange(of: draft) { _, new in draftEdited(new) }
+        .onChange(of: store.snapshot?.drafts[chatId]) { _, _ in applyRemoteDraft() }
+    }
+
+    // MARK: Draft sync
+
+    /// Sets the composer without counting it as the user's edit.
+    private func setDraft(_ text: String) {
+        guard text != draft else { return }
+        programmatic = text
+        draft = text
+    }
+
+    private func restoreDraft() {
+        if let e = LocalDrafts.load(chatId) {
+            prefilled = e.prefilled
+            prefilledAt = e.prefilledAt
+            draftAt = e.at
+            setDraft(e.text)
+        }
+        applyRemoteDraft()
+        if !draft.isEmpty, prefilled == nil { saveDraft(post: true) }   // the Mac may not have it yet
+    }
+
+    private func draftEdited(_ new: String) {
+        if programmatic == new { programmatic = nil; return }
+        programmatic = nil
+        prefilled = nil
+        prefilledAt = nil
+        draftAt = Date()
+        draftSave?.cancel()
+        draftSave = Task {
+            try? await Task.sleep(for: .seconds(1))
+            if !Task.isCancelled { saveDraft(post: true) }
+        }
+    }
+
+    /// Keeps the draft on this phone and, unless it came from the Mac, sends it there.
+    private func saveDraft(post: Bool) {
+        draftSave?.cancel()
+        draftSave = nil
+        LocalDrafts.save(chatId, .init(text: draft, at: draftAt ?? Date(), prefilled: prefilled, prefilledAt: prefilledAt))
+        guard post, prefilled == nil, draft != postedDraft else { return }
+        let id = chatId, text = draft
+        Task { if await store.postDraft(chatId: id, text: text) { postedDraft = text } }
+    }
+
+    /// Fills an empty (or untouched) composer with a newer desktop draft; never replaces typed text.
+    private func applyRemoteDraft() {
+        let remote = store.snapshot?.drafts[chatId]
+        guard let next = DraftMerge.composer(local: draft, prefilled: prefilled, localAt: draftAt, remote: remote) else { return }
+        prefilled = next.isEmpty ? nil : next
+        prefilledAt = next.isEmpty ? nil : remote?.at
+        setDraft(next)
+        saveDraft(post: false)
     }
 
     /// "stopped on a usage limit · resets 4:50pm"
@@ -395,7 +462,7 @@ struct ChatView: View {
         guard !t.isEmpty else { return }
         Haptics.send()
         let before = draft
-        if text == draft { draft = "" }
+        if text == draft { draft = "" } else { postedDraft = "" }   // the Mac drops its copy on any reply
         Task {
             let job = await store.perform(.reply(chatId: chatId, text: t))
             // Put the text back if the Mac never took it, so nothing typed is lost.

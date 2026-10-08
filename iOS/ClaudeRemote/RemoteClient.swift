@@ -132,6 +132,12 @@ actor RemoteClient {
         return a.job
     }
 
+    /// The composer's unsent text for a chat; empty clears it. Older Macs answer 404.
+    func setDraft(chatId: String, text: String) async throws {
+        let seg = chatId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? chatId
+        let _: Empty = try await send("POST", "/v1/chats/\(seg)/draft", body: try WireCoder.encoder.encode(DraftBody(text: text)))
+    }
+
     // MARK: Stream
 
     func openStream() async throws -> StreamSocket {

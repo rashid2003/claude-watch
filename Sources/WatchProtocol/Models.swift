@@ -211,16 +211,19 @@ public struct Snapshot: Codable, Sendable {
     public var systemLevel: HealthLevel? = nil
     /// Replies waiting for their chat to finish its turn (bridge only).
     public var replies: [QueuedReply] = []
+    /// Unsent composer text per chat id, from the phone or the desktop window (bridge only).
+    public var drafts: [String: ChatDraft] = [:]
 
     public init(at: Date, accounts: [AccountStatus], queue: [RetryItem], engineOwner: Bool, scanning: Bool,
                 moves: [PendingMove] = [], locations: [ChatLocation] = [], profiles: [Profile] = [],
-                prompts: [PendingPrompt] = [], systemLevel: HealthLevel? = nil, replies: [QueuedReply] = []) {
+                prompts: [PendingPrompt] = [], systemLevel: HealthLevel? = nil, replies: [QueuedReply] = [],
+                drafts: [String: ChatDraft] = [:]) {
         self.at = at; self.accounts = accounts; self.queue = queue; self.engineOwner = engineOwner
         self.scanning = scanning; self.moves = moves; self.locations = locations; self.profiles = profiles
-        self.prompts = prompts; self.systemLevel = systemLevel; self.replies = replies
+        self.prompts = prompts; self.systemLevel = systemLevel; self.replies = replies; self.drafts = drafts
     }
 
-    enum CodingKeys: String, CodingKey { case at, accounts, queue, engineOwner, scanning, moves, locations, profiles, prompts, systemLevel, replies }
+    enum CodingKeys: String, CodingKey { case at, accounts, queue, engineOwner, scanning, moves, locations, profiles, prompts, systemLevel, replies, drafts }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -235,6 +238,7 @@ public struct Snapshot: Codable, Sendable {
         prompts = try c.decodeIfPresent([PendingPrompt].self, forKey: .prompts) ?? []
         systemLevel = try c.decodeIfPresent(HealthLevel.self, forKey: .systemLevel)
         replies = try c.decodeIfPresent([QueuedReply].self, forKey: .replies) ?? []
+        drafts = (try? c.decodeIfPresent([String: ChatDraft].self, forKey: .drafts)) ?? [:]
     }
 
     /// Replies queued for one chat, oldest first.

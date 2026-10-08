@@ -23,6 +23,13 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     let replies = ReplyQueue(url: Paths.replyQueue)
     private var sentAt: [String: Date] = [:]           // chat -> when a reply last went out
     private var draining = Set<String>()                // chats whose queued replies are being sent
+    /// Unsent text per chat: posted by the phone, or read from the desktop composer while a phone watches the chat.
+    let drafts = DraftBook(url: Paths.drafts)
+    private let draftReader = DesktopDraftReader()
+    private let draftQueue = DispatchQueue(label: "claude-watch.drafts", qos: .utility)
+    private var draftTimer: DispatchSourceTimer?
+    /// Called on the main queue with every chat's draft when one changes (Mac chat list).
+    var onDrafts: (([String: ChatDraft]) -> Void)?
     /// Parsed transcripts, so reopening a chat on the phone only reads what's new.
     private let transcripts = TranscriptCache()
     private var lastActivity: [String: SessionStatus.Activity] = [:]
@@ -81,6 +88,13 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         try? broker.start()
         server.start()
         syncRelay()
+        let t = DispatchSource.makeTimerSource(queue: draftQueue)
+        t.schedule(deadline: .now() + 2, repeating: 2, leeway: .milliseconds(500))
+        t.setEventHandler { [weak self] in self?.pollDesktopDrafts() }
+        t.resume()
+        draftTimer = t
+        let all = drafts.all
+        DispatchQueue.main.async { [weak self] in self?.onDrafts?(all) }
         // Development: pair the Simulator without the menu (CLAUDE_WATCH_DEV_PAIR_CODE=123456).
         if let code = ProcessInfo.processInfo.environment["CLAUDE_WATCH_DEV_PAIR_CODE"], code.count == 6 {
             server.pairing.open(code: code, lifetime: 3600)
@@ -88,6 +102,8 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     }
 
     func stop() {
+        draftTimer?.cancel()
+        draftTimer = nil
         relay?.stop()
         relay = nil
         server.stop()
@@ -146,6 +162,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         var m = s
         m.systemLevel = lock.withLock { health?.level }
         m.replies = replies.all
+        m.drafts = drafts.all
         let extra = broker.prompts
         guard !extra.isEmpty else { return m }
         m.prompts += extra
@@ -156,6 +173,34 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             }
         }
         return m
+    }
+
+    // MARK: Drafts
+
+    func setDraft(chatId: String, text: String, device: Device) -> Bool {
+        guard session(chatId) != nil else { return false }
+        if drafts.setPhone(chatId: chatId, text: text) { draftsChanged() }
+        return true
+    }
+
+    /// Reads the desktop composer of chats a phone has open (every 2 s; nothing when no phone watches).
+    private func pollDesktopDrafts() {
+        let watched = server.watchedChats
+        drafts.forgetDesktop(except: watched)
+        guard !watched.isEmpty else { return draftReader.reset() }
+        var changed = false
+        for id in watched.sorted() {
+            guard let s = session(id), let p = profile(s.info.profileId),
+                  let text = draftReader.read(session: s.info, profile: p) else { continue }
+            if drafts.observeDesktop(chatId: id, text: text) { changed = true }
+        }
+        if changed { draftsChanged() }
+    }
+
+    private func draftsChanged() {
+        if let s = lock.withLock({ latest }) { server.publish(snapshot: merge(s)) }
+        let all = drafts.all
+        DispatchQueue.main.async { [weak self] in self?.onDrafts?(all) }
     }
 
     private func session(_ id: String) -> SessionStatus? {
@@ -296,6 +341,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         case .reply(let id, _), .answer(let id, _, _), .stop(let id): lock.withLock { touched[id] = Date() }
         default: break
         }
+        if case .reply(let id, _) = command, drafts.clear(chatId: id) { draftsChanged() }   // the draft was sent
         work.async { [self] in
             let (status, reason) = run(command)
             done(status, reason)
