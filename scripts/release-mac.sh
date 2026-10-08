@@ -13,7 +13,7 @@
 set -euo pipefail
 cd "${0:A:h}/.."
 
-VERSION="${VERSION:-0.3.0}"
+VERSION="${VERSION:-0.4.0}"
 BUILD="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}"
 BUNDLE_ID="${CLAUDE_WATCH_BUNDLE_ID:-dev.lajward.SessionWatch}"
 IDENTITY="${SIGN_IDENTITY:-Developer ID Application: Rashid Obaidi (6W5NJUTUCV)}"
