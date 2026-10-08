@@ -291,6 +291,7 @@ public final class BridgeServer: @unchecked Sendable {
                 if let id = conn.device?.id { devices.touch(id) }   // tells the Live Activity driver the app is open
                 if let d = try? WireCoder.encoder.encode(WSServerMessage.pong) { conn.sendText(d) }
             case .unsubscribe: conn.feed = nil
+            case .watchSystem, .unwatchSystem: break
             case .subscribe:
                 guard let id = m.chatId, let sub = handler?.subscribe(chatId: id) else { conn.feed = nil; return }
                 conn.feed = (id, sub.source)

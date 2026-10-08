@@ -194,16 +194,18 @@ public struct Snapshot: Codable, Sendable {
     public var profiles: [Profile] = []
     /// Permission prompts / questions waiting on the user, across every account.
     public var prompts: [PendingPrompt] = []
+    /// The Mac's overall resource level (nil from Macs without system health).
+    public var systemLevel: HealthLevel? = nil
 
     public init(at: Date, accounts: [AccountStatus], queue: [RetryItem], engineOwner: Bool, scanning: Bool,
                 moves: [PendingMove] = [], locations: [ChatLocation] = [], profiles: [Profile] = [],
-                prompts: [PendingPrompt] = []) {
+                prompts: [PendingPrompt] = [], systemLevel: HealthLevel? = nil) {
         self.at = at; self.accounts = accounts; self.queue = queue; self.engineOwner = engineOwner
         self.scanning = scanning; self.moves = moves; self.locations = locations; self.profiles = profiles
-        self.prompts = prompts
+        self.prompts = prompts; self.systemLevel = systemLevel
     }
 
-    enum CodingKeys: String, CodingKey { case at, accounts, queue, engineOwner, scanning, moves, locations, profiles, prompts }
+    enum CodingKeys: String, CodingKey { case at, accounts, queue, engineOwner, scanning, moves, locations, profiles, prompts, systemLevel }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -216,6 +218,7 @@ public struct Snapshot: Codable, Sendable {
         locations = try c.decodeIfPresent([ChatLocation].self, forKey: .locations) ?? []
         profiles = try c.decodeIfPresent([Profile].self, forKey: .profiles) ?? []
         prompts = try c.decodeIfPresent([PendingPrompt].self, forKey: .prompts) ?? []
+        systemLevel = try c.decodeIfPresent(HealthLevel.self, forKey: .systemLevel)
     }
 
     /// Every listed chat across accounts, newest activity first.

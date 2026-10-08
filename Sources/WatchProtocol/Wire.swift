@@ -156,7 +156,7 @@ public struct WireError: Codable, Sendable, Error {
 
 /// Push event kinds a device can switch on or off.
 public enum NotifyEvent: String, Codable, Sendable, CaseIterable {
-    case prompt, finished, failed, account
+    case prompt, finished, failed, account, system
 }
 
 public struct DeviceRegistration: Codable, Sendable {
@@ -228,7 +228,7 @@ public struct FolderSuggestion: Codable, Hashable, Sendable, Identifiable {
 // MARK: - WebSocket
 
 public struct WSClientMessage: Codable, Sendable, Equatable {
-    public enum Kind: String, Codable, Sendable { case subscribe, unsubscribe, ping }
+    public enum Kind: String, Codable, Sendable { case subscribe, unsubscribe, ping, watchSystem, unwatchSystem }
     public var type: Kind
     public var chatId: String?
     public init(type: Kind, chatId: String? = nil) { self.type = type; self.chatId = chatId }
@@ -240,11 +240,14 @@ public enum WSServerMessage: Sendable {
     /// (the first batch after subscribing); `before` is then the cursor for older pages.
     case messages(chatId: String, messages: [ChatMessage], reset: Bool, before: Int?)
     case job(Job)
+    /// The Mac's resources, every 5 s while the phone watches (`watchSystem`). The first one after
+    /// `watchSystem` carries the full history, later ones only the newest point.
+    case system(SystemHealth)
     case pong
 }
 
 extension WSServerMessage: Codable {
-    enum CodingKeys: String, CodingKey { case type, snapshot, chatId, messages, reset, before, job }
+    enum CodingKeys: String, CodingKey { case type, snapshot, chatId, messages, reset, before, job, system }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -256,6 +259,7 @@ extension WSServerMessage: Codable {
                              reset: try c.decodeIfPresent(Bool.self, forKey: .reset) ?? false,
                              before: try c.decodeIfPresent(Int.self, forKey: .before))
         case "job": self = .job(try c.decode(Job.self, forKey: .job))
+        case "system": self = .system(try c.decode(SystemHealth.self, forKey: .system))
         case "pong": self = .pong
         case let t: throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(t)")
         }
@@ -270,6 +274,7 @@ extension WSServerMessage: Codable {
             try c.encode(m, forKey: .messages); try c.encode(reset, forKey: .reset)
             try c.encodeIfPresent(before, forKey: .before)
         case .job(let j): try c.encode("job", forKey: .type); try c.encode(j, forKey: .job)
+        case .system(let h): try c.encode("system", forKey: .type); try c.encode(h, forKey: .system)
         case .pong: try c.encode("pong", forKey: .type)
         }
     }
