@@ -8,6 +8,19 @@
 #   VARIANT=next scripts/release-mac.sh    "Session Watch Next": a side-by-side build with its own bundle id,
 #                                          data folder (claude-watch-next) and port (7434), for trying changes
 #                                          without touching the installed app
+#   DRY_RUN=1 scripts/release-mac.sh       print the version and build number it would use, then stop
+#
+# Version: scripts/MAC_VERSION holds the last released version and is the source of truth.
+#   (default)        bump the patch: 0.4.0 → 0.4.1
+#   BUMP=minor       0.4.0 → 0.5.0          BUMP=major   0.4.0 → 1.0.0
+#   BUMP=none        rebuild the same version (e.g. after a failed notarization you want to redo by hand)
+#   VERSION=x.y.z    use exactly this version
+# The new version is written to scripts/MAC_VERSION only after notarization succeeds, so a failed or
+# --no-notarize run leaves it alone and a rerun gets the same number. The script never commits or tags;
+# commit scripts/MAC_VERSION yourself ("Release the Mac app as x.y.z").
+# VARIANT=next computes the same upcoming version (so Next shows what the next release will be) but never
+# writes scripts/MAC_VERSION: Next builds don't use up a version number.
+# The build number (CFBundleVersion) is a timestamp, YYYYMMDDHHMM; override with BUILD_NUMBER.
 #
 # Notarization uses a notarytool keychain profile, created once with:
 #   xcrun notarytool store-credentials session-watch-notary --apple-id <you> --team-id 6W5NJUTUCV
@@ -16,7 +29,22 @@
 set -euo pipefail
 cd "${0:A:h}/.."
 
-VERSION="${VERSION:-0.4.0}"
+VERSION_FILE=scripts/MAC_VERSION
+LAST_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+semver() { [[ "$1" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]] }
+semver "$LAST_VERSION" || { echo "$VERSION_FILE holds '$LAST_VERSION', not x.y.z" >&2; exit 1; }
+if [[ -n "${VERSION:-}" ]]; then
+  semver "$VERSION" || { echo "VERSION must be x.y.z, got '$VERSION'" >&2; exit 1; }
+else
+  parts=("${(@s/./)LAST_VERSION}")
+  case "${BUMP:-patch}" in
+    patch) VERSION="${parts[1]}.${parts[2]}.$(( parts[3] + 1 ))" ;;
+    minor) VERSION="${parts[1]}.$(( parts[2] + 1 )).0" ;;
+    major) VERSION="$(( parts[1] + 1 )).0.0" ;;
+    none)  VERSION="$LAST_VERSION" ;;
+    *) echo "BUMP must be patch, minor, major or none, got '$BUMP'" >&2; exit 1 ;;
+  esac
+fi
 BUILD="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}"
 VARIANT="${VARIANT:-}"
 if [[ "$VARIANT" == "next" ]]; then
@@ -29,6 +57,23 @@ IDENTITY="${SIGN_IDENTITY:-Developer ID Application: Rashid Obaidi (6W5NJUTUCV)}
 PROFILE="${NOTARY_PROFILE:-session-watch-notary}"
 APP="$OUT/ClaudeWatch.app"
 DMG="$OUT/${NAME// /}-$VERSION.dmg"
+
+record_version() {
+  if [[ "$VARIANT" == "next" ]]; then
+    echo "Version $VERSION not recorded (Next builds leave $VERSION_FILE at $LAST_VERSION)"
+  elif [[ "$VERSION" != "$LAST_VERSION" ]]; then
+    print -r -- "$VERSION" > "$VERSION_FILE"
+    echo "Recorded $VERSION in $VERSION_FILE (was $LAST_VERSION). Commit it: Release the Mac app as $VERSION"
+  fi
+}
+
+echo "› $NAME $VERSION (build $BUILD; last release $LAST_VERSION)"
+if [[ -n "${DRY_RUN:-}" && "${DRY_RUN}" != "0" ]]; then
+  echo "Dry run: would build $DMG"
+  [[ "$VARIANT" == "next" ]] && echo "Dry run: Next build, $VERSION_FILE would stay $LAST_VERSION" \
+    || echo "Dry run: $VERSION_FILE would become $VERSION after notarization"
+  exit 0
+fi
 
 echo "› building universal release"
 ARCHS=(--arch arm64 --arch x86_64)
@@ -89,4 +134,5 @@ fi
 xcrun notarytool submit "$DMG" $AUTH --wait
 xcrun stapler staple "$DMG"
 spctl --assess --type open --context context:primary-signature -v "$DMG"
+record_version
 echo "Ready to share: $DMG"

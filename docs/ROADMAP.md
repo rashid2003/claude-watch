@@ -38,6 +38,9 @@ Last updated: 2026-10-09.
 | 🧪 | **See what a chat is doing, like the Claude app** | `feat/live-work` | `WorkTracker` follows running tool calls, subagents (their own `subagents/agent-*.jsonl` files) and background shells/monitors; ends them on results, task notifications (user entries, mid-turn `queued_command` and `task_status` attachments), TaskStop or interrupts. Phone: "live" panel under the tasks with timers and each subagent's current step; chats list shows `↳ 2 agents · Bash: swift test`. Checked in the Simulator against Session Watch Next |
 | 🧪 | **iPhone app version on the Mac; update hints** | `feat/devices-offline` | `WireProtocol.current = 2` (no number = 1; bump rules in `Versions.swift`). The phone sends `X-Session-Watch-Version/-Build/-Protocol` on every request; the Mac keeps `Device.client` and shows "App 1.3 (build) · protocol 2" under each paired device, with "Update Session Watch on this iPhone" when it's older. `/v1/status` carries `protocolVersion`; on a mismatch the phone shows a dismissible banner: "Update Session Watch from TestFlight" or "… on the Mac". Never blocks |
 | 🧪 | **Live Activity goes offline when the Mac sleeps or quits** | `feat/devices-offline` | On `willSleep` and on quit the Mac sends one priority-10 update with `offline: "sleep"/"quit"`, `connected: false` and a stale date of now (so older widget builds show offline too), waiting up to 2 s. Nothing more until `didWake`, when the next snapshot goes out at once. Says "Mac asleep" / "Mac app quit". A push that never left the Mac is retried on the next snapshot |
+| 🧪 | **Mac release script bumps the version** | `feat/release-tooling` | `scripts/MAC_VERSION` holds the last release. Default bumps the patch; `BUMP=minor\|major\|none` or `VERSION=x.y.z`. Written only after notarization succeeds, never for `VARIANT=next`. `DRY_RUN=1` prints the version and stops. No commits or tags |
+| 🧪 | **Relay metrics without content** | `feat/release-tooling` | Streams, bytes each way, errors by kind, auth failures, active Mac rooms; per deployment and in total. Rooms batch counters for 5 s into a `RelayMetrics` Durable Object. `GET /v1/metrics` with the `METRICS_TOKEN` secret. No payloads, ids, keys or IPs. Not deployed yet |
+| 🧪 | **Session Watch Next for iPhone** | `feat/release-tooling` | `VARIANT=next iOS/scripts/release.sh` (`iOS/Config/Next.xcconfig`): `dev.lajward.SessionWatch.next` + `.next.Widgets`, "Session Watch Next", own keychain groups, manual pairing port 7434. Compiles for the Simulator; needs its App Store Connect record before the first upload |
 
 ## Needs a real device
 
@@ -50,11 +53,15 @@ Last updated: 2026-10-09.
 - Paired devices show the TestFlight build's version once it has connected; an old TestFlight build shows "version unknown" plus the update warning
 - Relay mode in the iPhone **Simulator**: the in-app `NWListener` never accepts (`SO_NECP_LISTENUUID failed`), so the Simulator shows "mac unreachable" over the relay. Use direct mode there (debug builds pair with `SIMCTL_CHILD_SW_PAIR='<QR JSON>'`). Real phones are unaffected
 
+## Needs you
+
+- **Relay metrics**: after `feat/release-tooling` is merged and the relay deployed, set the token once: `cd relay && npx wrangler secret put METRICS_TOKEN` (a long random value, e.g. `openssl rand -hex 24`). Until then `/v1/metrics` answers 404. Read: `curl -H "Authorization: Bearer <token>" https://relay.sessionwatch.lajward.co/v1/metrics`
+- **iPhone Next app**: in App Store Connect create the app "Session Watch Next", bundle id `dev.lajward.SessionWatch.next`; register the App IDs `dev.lajward.SessionWatch.next` (Push Notifications) and `dev.lajward.SessionWatch.next.Widgets` on developer.apple.com if the first archive's `-allowProvisioningUpdates` doesn't. Then `VARIANT=next iOS/scripts/release.sh`
+- **Mac release**: commit `scripts/MAC_VERSION` after a release ("Release the Mac app as x.y.z"); the script doesn't
+
 ## Later
 
-- Release script bumps the Mac version automatically
-- Relay metrics (streams, errors) without logging content
-- Separate iPhone "Next" app (needs its own App Store Connect record) so phone builds can be tried without replacing the TestFlight app
+- Push notifications for the Next pair (the Mac's Next build has no APNs key, and the phone Next app would need its own topic `dev.lajward.SessionWatch.next`)
 
 ## Decisions
 
