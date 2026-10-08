@@ -7,8 +7,11 @@ enum MessageCache {
     struct Entry: Codable {
         var savedAt: Date
         var messages: [ChatMessage]
-        /// Paging cursor that went with `messages`.
+        /// Paging cursor that went with `messages`: an index (older Macs) or `cursor`.
         var before: Int?
+        var cursor: String?
+
+        var older: OlderCursor? { OlderCursor(cursor: cursor, before: before) }
     }
 
     static let keepMessages = 300
@@ -32,12 +35,22 @@ enum MessageCache {
         return try? WireCoder.decoder.decode(Entry.self, from: data)
     }
 
-    static func save(_ chatId: String, messages: [ChatMessage], before: Int?) {
+    static func save(_ chatId: String, messages: [ChatMessage], older: OlderCursor?) {
         guard let url = file(chatId), !messages.isEmpty else { return }
         let dropped = max(0, messages.count - keepMessages)
-        // Trimming the front moves the cursor along with it.
-        let cursor = dropped > 0 ? (before ?? 0) + dropped : before
-        let entry = Entry(savedAt: Date(), messages: Array(messages.suffix(keepMessages)), before: cursor)
+        var before: Int?, cursor: String?
+        switch older {
+        case .index(let i): before = i
+        case .token(let c): cursor = c
+        case nil: break
+        }
+        if dropped > 0 {
+            // Trimming the front moves an index along with it. A Mac cursor can't be moved: it's dropped, and
+            // the chat gets a fresh one from the Mac when it's opened.
+            before = (before ?? 0) + dropped
+            if cursor != nil { before = nil; cursor = nil }
+        }
+        let entry = Entry(savedAt: Date(), messages: Array(messages.suffix(keepMessages)), before: before, cursor: cursor)
         guard let data = try? WireCoder.encoder.encode(entry) else { return }
         try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         prune()

@@ -30,9 +30,10 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     private let draftReader = DesktopDraftReader()
     private let draftQueue = DispatchQueue(label: "claude-watch.drafts", qos: .utility)
     private var draftTimer: DispatchSourceTimer?
+    private var powerObservers: [NSObjectProtocol] = []
     /// Called on the main queue with every chat's draft when one changes (Mac chat list).
     var onDrafts: (([String: ChatDraft]) -> Void)?
-    /// Parsed transcripts, so reopening a chat on the phone only reads what's new.
+    /// Transcripts read from their end, so opening a chat on the phone reads only its newest lines and reopening only what is new.
     private let transcripts = TranscriptCache()
     private var lastActivity: [String: SessionStatus.Activity] = [:]
     private var knownPrompts = Set<String>()
@@ -72,6 +73,11 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             return (s.info.title, s.info.profileId)
         }
         broker.onChange = { [weak self] _ in self?.republish() }
+        // Terminal prompt hook: only hold the terminal's request while a phone can actually be asked.
+        broker.holdHook = { [weak self] id in
+            guard let self, self.session(id)?.info.isTerminalChat == true else { return false }
+            return self.phoneReachable
+        }
         pusher.onInvalidToken = { [weak self] id in self?.server.devices.update(id) { $0.apnsToken = nil } }
         runner.onExit = { [weak self] sid, _ in self?.broker.clear(chatId: sid); self?.monitor.refreshNow() }
     }
@@ -97,6 +103,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         draftTimer = t
         let all = drafts.all
         DispatchQueue.main.async { [weak self] in self?.onDrafts?(all) }
+        observeSleep()
         // Development: pair the Simulator without the menu (CLAUDE_WATCH_DEV_PAIR_CODE=123456).
         if let code = ProcessInfo.processInfo.environment["CLAUDE_WATCH_DEV_PAIR_CODE"], code.count == 6 {
             server.pairing.open(code: code, lifetime: 3600)
@@ -104,6 +111,8 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     }
 
     func stop() {
+        powerObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        powerObservers = []
         draftTimer?.cancel()
         draftTimer = nil
         relay?.stop()
@@ -113,9 +122,31 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         setKeepAwake(false)
     }
 
+    /// Live Activities show the Mac offline as soon as it sleeps, and current again as soon as it wakes.
+    private func observeSleep() {
+        let nc = NSWorkspace.shared.notificationCenter
+        // Delivered on the main thread; the system waits for observers, so the goodbye push gets out before sleep.
+        powerObservers = [
+            nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
+                self?.macGoingOffline(LiveLimits.Offline.sleep)
+            },
+            nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { [weak self] _ in
+                self?.macWoke()
+            },
+        ]
+    }
+
+    /// A paired phone is connected now, or can be reached with a push.
+    private var phoneReachable: Bool {
+        let devices = server.devices.all
+        guard !devices.isEmpty else { return false }
+        return server.hasSocketClients || (pusher.isConfigured && devices.contains { $0.apnsToken != nil && $0.wants(.prompt) })
+    }
+
     // MARK: Snapshot fan-out
 
     func update(_ s: Snapshot) {
+        releaseStaleHookPrompts(s)
         let merged = merge(s)
         lock.withLock { latest = s }
         server.publish(snapshot: merged)
@@ -159,6 +190,16 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         driveLiveActivities(merged)
     }
 
+    /// A terminal hook prompt goes back to the terminal once it was answered there (the transcript
+    /// moved on) or the terminal session closed.
+    private func releaseStaleHookPrompts(_ s: Snapshot) {
+        for p in broker.prompts where PromptBroker.isHook(p.id) {
+            guard let sess = s.sessions.first(where: { $0.id == p.chatId }) else { broker.release(id: p.id); continue }
+            let movedOn = sess.tail.lastAt.map { $0 > p.at.addingTimeInterval(1) } ?? false
+            if movedOn || sess.info.openInTerminal != true { broker.release(id: p.id) }
+        }
+    }
+
     /// Adds headless prompts; a chat with one counts as waiting.
     private func merge(_ s: Snapshot) -> Snapshot {
         var m = s
@@ -167,6 +208,9 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         m.drafts = drafts.all
         let extra = broker.prompts
         guard !extra.isEmpty else { return m }
+        // A terminal prompt the phone can answer (through the hook) replaces its view-only copy.
+        let answerable = Set(extra.map(\.chatId))
+        m.prompts.removeAll { $0.viewOnly == true && answerable.contains($0.chatId) }
         m.prompts += extra
         let waiting = Set(extra.map(\.chatId))
         for a in m.accounts.indices {
@@ -192,7 +236,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         guard !watched.isEmpty else { return draftReader.reset() }
         var changed = false
         for id in watched.sorted() {
-            guard let s = session(id), let p = profile(s.info.profileId),
+            guard let s = session(id), !s.info.isTerminalChat, let p = profile(s.info.profileId),
                   let text = draftReader.read(session: s.info, profile: p) else { continue }
             if drafts.observeDesktop(chatId: id, text: text) { changed = true }
         }
@@ -203,6 +247,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         if let s = lock.withLock({ latest }) { server.publish(snapshot: merge(s)) }
         let all = drafts.all
         DispatchQueue.main.async { [weak self] in self?.onDrafts?(all) }
+        observeSleep()
     }
 
     private func session(_ id: String) -> SessionStatus? {
@@ -278,10 +323,20 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         transcript(chatId).map { transcripts.page($0, before: before, limit: limit) }
     }
 
+    func messages(chatId: String, cursor: String?, limit: Int) -> MessagesPage? {
+        transcript(chatId).map { transcripts.page($0, cursor: cursor, limit: limit) }
+    }
+
     func subscribe(chatId: String) -> (source: MessageSource, initial: [ChatMessage])? {
         guard let url = transcript(chatId) else { return nil }
         let (all, feed) = transcripts.open(url)
         return (feed, all)
+    }
+
+    func subscribe(chatId: String, limit: Int) -> (source: MessageSource, page: MessagesPage)? {
+        guard let url = transcript(chatId) else { return nil }
+        let (page, feed) = transcripts.open(url, limit: limit)
+        return (feed, page)
     }
 
     func folders(profileId: String) -> [FolderSuggestion] {
@@ -321,13 +376,19 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     func check(_ command: BridgeCommand) -> (Int, String)? {
         switch command {
         case .reply(let id, _):
-            guard session(id) != nil else { return (404, "That chat isn't listed on the Mac any more") }
+            guard let s = session(id) else { return (404, "That chat isn't listed on the Mac any more") }
+            if let e = HeadlessRunner.terminalGuard(s.info) { return (409, e.message) }
         case .answer(_, let pid, _):
-            guard snapshot()?.prompts.contains(where: { $0.id == pid }) == true else { return (409, "That prompt is no longer pending") }
+            guard let p = snapshot()?.prompts.first(where: { $0.id == pid }) else { return (409, "That prompt is no longer pending") }
+            if p.viewOnly == true { return (409, Self.answerInTerminal) }
         case .stop(let id):
-            guard session(id) != nil else { return (404, "That chat isn't listed on the Mac any more") }
+            guard let s = session(id) else { return (404, "That chat isn't listed on the Mac any more") }
+            if s.info.isTerminalChat, !runner.isRunning(sessionId: id) { return (409, "Stop this chat in the terminal on the Mac") }
+        case .move(let id, _):
+            if session(id)?.info.isTerminalChat == true { return (409, "Terminal chats can't be moved to another window") }
         case .newChat(let p, let cwd, let prompt, let trust):
-            guard profile(p) != nil else { return (404, "Unknown account") }
+            guard let prof = profile(p) else { return (404, "Unknown account") }
+            if prof.isTerminal { return (400, "Start terminal chats in a terminal on the Mac") }
             guard FileManager.default.fileExists(atPath: cwd) else { return (400, "No such folder on the Mac: \(cwd)") }
             if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return (400, "Write a prompt first") }
             if !trust && !WorkspaceTrust.isTrusted(cwd) { return (409, DesktopActions.untrustedMessage) }
@@ -374,11 +435,15 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         return s.activity == .working || s.activity == .waiting || runner.isRunning(sessionId: s.id) || recent
     }
 
+    static let answerInTerminal = "Answer this in the terminal on the Mac"
+
     /// Sends a reply now: in the background with the account's CLI token, else typed into the desktop window.
+    /// Terminal chats always go in the background, as whoever the `claude` CLI is signed into.
     private func send(_ text: String, to s: SessionStatus) -> (JobStatus, String?) {
         guard let p = profile(s.info.profileId) else { return (.failed, "Chat not found") }
+        if let e = HeadlessRunner.terminalGuard(s.info) { return (.failed, e.message) }
         lock.withLock { sentAt[s.id] = Date() }
-        if TokenStore.get(p.id) == nil {
+        if !s.info.isTerminalChat, TokenStore.get(p.id) == nil {
             return result(UIRetry.type(message: text, session: s.info, profile: p).map { _ in "Typed into the \(p.name) window" })
         }
         return result(runner.reply(text, session: s.info, profile: p, activity: s.activity)
@@ -408,6 +473,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         switch command {
         case .reply(let id, let text):
             guard let s = session(id) else { return (.failed, "Chat not found") }
+            if let e = HeadlessRunner.terminalGuard(s.info) { return (.failed, e.message) }
             if isBusy(s) || replies.has(chatId: id) {   // behind earlier queued replies too, so order holds
                 replies.add(chatId: id, text: text)
                 republish()
@@ -427,6 +493,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             }
             guard prompt.kind == .permission else { return (.failed, "Answer this question on the Mac") }
             guard let s = session(chatId), let p = profile(s.info.profileId) else { return (.failed, "Chat not found") }
+            if prompt.viewOnly == true || s.info.isTerminalChat { return (.failed, Self.answerInTerminal) }
             let r = DesktopActions.answer(decision: decision, session: s.info, profile: p)
             guard case .success = r else { return result(r) }
             // Pressed: confirm the prompt went away.
@@ -441,10 +508,11 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         case .stop(let id):
             if runner.stop(sessionId: id) { return (.done, "Stopped the background run") }
             guard let s = session(id), let p = profile(s.info.profileId) else { return (.failed, "Chat not found") }
+            if s.info.isTerminalChat { return (.failed, "Stop this chat in the terminal on the Mac") }
             return result(DesktopActions.stop(session: s.info, profile: p))
 
         case .newChat(let pid, let cwd, let prompt, let trust):
-            guard let p = profile(pid) else { return (.failed, "Unknown account") }
+            guard let p = profile(pid), !p.isTerminal else { return (.failed, "Unknown account") }
             let r = DesktopActions.newChat(profile: p, cwd: cwd, prompt: prompt, allowTrust: trust)
             monitor.refreshNow()
             return result(r)
@@ -464,6 +532,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
 
         case .move(let sid, let toId):
             guard let snap = lock.withLock({ latest }), let s = session(sid) else { return (.failed, "Chat not found") }
+            if s.info.isTerminalChat { return (.failed, "Terminal chats can't be moved to another window") }
             if s.activity == .working || s.activity == .waiting { return (.failed, "Can't move a chat while it's working or waiting on you") }
             let parts = s.info.folder.split(separator: "/").map(String.init)
             guard parts.count == 2, let to = snap.locations.first(where: { $0.id == toId }) else { return (.failed, "Unknown destination") }
@@ -519,16 +588,48 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         for d in server.devices.all where d.liveActivity != nil || d.activityToken != nil {
             for (token, push) in liveActivities.plan(for: d, limits, macName: server.macName) {
                 let id = d.id, isStart = push.event == .start
-                pusher.send(push, token: token, environment: d.apnsEnvironment) { [weak self] in
+                pusher.send(push, token: token, environment: d.apnsEnvironment, gone: { [weak self] in
                     self?.liveActivities.forget(id)
                     self?.server.devices.update(id) { isStart ? ($0.activityStartToken = nil) : ($0.activityToken = nil) }
-                }
+                }, done: { [weak self] status in
+                    // Never left the Mac (network not up yet, e.g. just after waking): try again on the next snapshot.
+                    if status == 0, push.event == .update { self?.liveActivities.forget(id) }
+                })
                 // An ended activity's token is dead; the phone sends the new one once the fresh activity starts.
                 if push.event == .end {
                     liveActivities.forget(id)
                     server.devices.update(id) { $0.activityToken = nil; $0.activityStartedAt = nil }
                 }
             }
+        }
+    }
+
+    /// The Mac is going to sleep or quitting: tells each running Live Activity it is offline now, rather than leaving
+    /// it to go stale minutes later. Waits up to `wait` for Apple to take the pushes (call it off the bridge's queues;
+    /// the URLSession answers on its own). Nothing more goes out until `macWoke`.
+    func macGoingOffline(_ reason: String, wait: TimeInterval = 2) {
+        guard pusher.isConfigured, let snap = lock.withLock({ latest }).map(merge) else { return }
+        let sends = liveActivities.goingOffline(server.devices.all, LiveLimits(snap), reason: reason, macName: server.macName)
+        guard !sends.isEmpty else { return }
+        let group = DispatchGroup()
+        let env = Dictionary(server.devices.all.map { ($0.id, $0.apnsEnvironment) }, uniquingKeysWith: { a, _ in a })
+        for (id, token, push) in sends {
+            group.enter()
+            pusher.send(push, token: token, environment: env[id] ?? nil, gone: { [weak self] in
+                self?.server.devices.update(id) { $0.activityToken = nil }
+            }, done: { _ in group.leave() })
+        }
+        _ = group.wait(timeout: .now() + wait)
+    }
+
+    /// Back from sleep: the next snapshot goes to every Live Activity at once, without waiting for a change.
+    func macWoke() {
+        liveActivities.resume()
+        guard let s = lock.withLock({ latest }) else { return }
+        // Give the network a moment; a push that still can't leave is retried on the following snapshot.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self else { return }
+            self.driveLiveActivities(self.merge(self.lock.withLock { self.latest } ?? s))
         }
     }
 

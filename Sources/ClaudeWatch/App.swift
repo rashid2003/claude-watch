@@ -193,6 +193,7 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
     }
 
     func open(sessionId: String, profileId: String) {
+        guard profileId != Profile.terminalId else { return }   // lives in a terminal, not a window
         monitor.perform { m in
             if let p = m.profile(id: profileId) { DesktopLink.reveal(sessionId: sessionId, profile: p) }
         }
@@ -268,7 +269,12 @@ final class WatchModel: NSObject, ObservableObject, UNUserNotificationCenterDele
 
     func quit() { NSApp.terminate(nil) }   // AppDelegate.applicationWillTerminate stops the bridge and monitor
 
-    func shutdown() { bridge?.stop(); monitor.stop() }
+    /// Quitting: the Live Activity hears the Mac is going offline (up to 2 s), then everything stops.
+    func shutdown() {
+        bridge?.macGoingOffline(LiveLimits.Offline.quit)
+        bridge?.stop()
+        monitor.stop()
+    }
 
     /// Quits and opens the app again (bridge port / on-off changes need a fresh process).
     func relaunch() {
@@ -448,6 +454,7 @@ struct SessionRow: View {
                 Text(s.info.title).lineLimit(1).truncationMode(.tail)
                 Text("· " + (s.info.cwd as NSString).lastPathComponent)
                     .foregroundStyle(.secondary).lineLimit(1)
+                if s.info.isTerminalChat { Text("· terminal").foregroundStyle(.tertiary).lineLimit(1).fixedSize() }
                 if let account { Text("· " + account).foregroundStyle(.tertiary).lineLimit(1) }
                 Spacer(minLength: 4)
                 if lastActive { Text(Fmt.ago(s.info.lastActivityAt)).foregroundStyle(.tertiary).lineLimit(1) }
@@ -476,7 +483,8 @@ struct SessionRow: View {
         .contentShape(Rectangle())
         .onHover { hover = $0 }
         .onTapGesture(perform: open)
-        .help(s.tail.lastRateLimit?.text ?? "Open in Claude")
+        .help(s.tail.lastRateLimit?.text ?? (s.info.isTerminalChat
+            ? (s.info.openInTerminal == true ? "Open in a terminal" : "Ran in a terminal") : "Open in Claude"))
         .contextMenu {
             if let d = phoneDraft {
                 Button("Copy iPhone draft") {
@@ -550,17 +558,20 @@ struct AccountCard: View {
                      + (a.tokensPerHourNow > 0 ? " · \(Fmt.tokens(a.tokensPerHourNow))/h" : ""))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("All chats…") {
-                    model.chatsProfile = a.profile.id
-                    openWindow(id: "chats")
-                    NSApp.activate(ignoringOtherApps: true)
+                // Terminal chats have no desktop window: nothing to browse, nothing is retried.
+                if !a.profile.isTerminal {
+                    Button("All chats…") {
+                        model.chatsProfile = a.profile.id
+                        openWindow(id: "chats")
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
+                    .buttonStyle(.link)
+                    Picker("", selection: Binding(get: { a.retryMode }, set: { model.setMode($0, a.profile.id) })) {
+                        ForEach(RetryMode.allCases, id: \.self) { Text($0.rawValue.uppercased()).tag($0) }
+                    }
+                    .pickerStyle(.segmented).labelsHidden().frame(width: 120).controlSize(.mini)
+                    .help("How failed chats are retried after the limit resets")
                 }
-                .buttonStyle(.link)
-                Picker("", selection: Binding(get: { a.retryMode }, set: { model.setMode($0, a.profile.id) })) {
-                    ForEach(RetryMode.allCases, id: \.self) { Text($0.rawValue.uppercased()).tag($0) }
-                }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 120).controlSize(.mini)
-                .help("How failed chats are retried after the limit resets")
             }
             .font(Theme.monoSmall)
             ForEach(visibleSessions) { s in

@@ -73,7 +73,7 @@ struct ChatView: View {
             .toolbar {
                 ToolbarItem(placement: .principal) { titleView }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    if session?.isWorking == true { stopButton }
+                    if session?.isWorking == true, session?.info.openInTerminal != true { stopButton }
                     menu
                 }
             }
@@ -98,6 +98,7 @@ struct ChatView: View {
                 HStack(spacing: 4) {
                     Circle().fill(activityColor(s)).frame(width: 6, height: 6)
                     Text("\(store.snapshot?.accountName(forProfile: s.info.profileId) ?? s.info.profileId) · \(Fmt.folderName(s.info.cwd))")
+                    if s.info.isTerminalChat { TerminalTag() }
                 }
                 .font(Theme.monoTiny)
                 .foregroundStyle(.secondary)
@@ -318,7 +319,13 @@ struct ChatView: View {
             if session?.isWorking == true {
                 workingBar.transition(.opacity)
             }
-            composer
+            if session?.info.openInTerminal == true {
+                // Two writers would corrupt the chat: the Mac refuses replies while the terminal has it open.
+                EmptyNote(text: "open in a terminal on the Mac", hint: "Reply there, or close it to reply from here.", glyph: "⌨")
+                    .padding(.vertical, -8)
+            } else {
+                composer
+            }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: prompts.map(\.id))
         .animation(.snappy, value: session?.isWorking)
@@ -337,13 +344,15 @@ struct ChatView: View {
                 .foregroundStyle(Theme.yellow)
                 .lineLimit(1)
             Spacer(minLength: 4)
-            Button("■ stop") {
-                Haptics.deny()
-                Task { await store.perform(.stop(chatId: chatId)) }
+            if session?.info.openInTerminal != true {
+                Button("■ stop") {
+                    Haptics.deny()
+                    Task { await store.perform(.stop(chatId: chatId)) }
+                }
+                .buttonStyle(OutlineButtonStyle(color: Theme.red))
+                .fixedSize()
+                .disabled(!store.canSend || store.isPending(Keys.stop(chatId)))
             }
-            .buttonStyle(OutlineButtonStyle(color: Theme.red))
-            .fixedSize()
-            .disabled(!store.canSend || store.isPending(Keys.stop(chatId)))
         }
         .font(Theme.monoSmall)
     }

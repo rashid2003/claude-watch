@@ -15,6 +15,8 @@ final class HeadlessRunnerTests: XCTestCase {
         #!/bin/sh
         printf '%s\\n' "$@" > '\(argsFile.path)'
         printf '%s' "$CLAUDE_CODE_OAUTH_TOKEN" > '\(argsFile.path).token'
+        printf '%s' "${CLAUDE_CODE_OAUTH_TOKEN+set}" > '\(argsFile.path).tokenset'
+        printf '%s' "$CLAUDE_WATCH_HEADLESS" > '\(argsFile.path).headless'
         exec sleep 30
         """.write(to: stub, atomically: true, encoding: .utf8)
         chmod(stub.path, 0o755)
@@ -77,6 +79,45 @@ final class HeadlessRunnerTests: XCTestCase {
         }
         XCTAssertTrue(noTok.blocked)
         XCTAssertTrue(noTok.message.contains("set-token p"))
+    }
+
+    func terminalSession(open: Bool) -> SessionInfo {
+        var s = SessionInfo(id: "6f1c2c1e-0000-4000-8000-000000000001", cliSessionId: "6f1c2c1e-0000-4000-8000-000000000001",
+                            priorCliSessionIds: [], profileId: Profile.terminalId, accountUuid: "a/o", title: "Term",
+                            cwd: dir.path, model: nil, permissionMode: nil, lastActivityAt: Date(), isArchived: false,
+                            desktopError: nil, desktopErrorAt: nil, hasPendingPermission: false)
+        s.isTerminal = true
+        s.openInTerminal = open ? true : nil
+        return s
+    }
+
+    func testTerminalChatRunsWithTheCLIsOwnLogin() throws {
+        // Even with a desktop token around, a terminal chat runs as whoever `claude` is signed into.
+        let r = runner(token: "desktop-token")
+        let s = terminalSession(open: false)
+        guard case .success = r.reply("go on", session: s, profile: .terminal, activity: .idle) else {
+            return XCTFail("should start without a token")
+        }
+        waitForFile(URL(fileURLWithPath: argsFile.path + ".headless"))
+        let args = try String(contentsOf: argsFile, encoding: .utf8).split(separator: "\n").map(String.init)
+        XCTAssertEqual(Array(args.prefix(2)), ["--resume", s.id])
+        XCTAssertTrue(args.contains("--permission-prompt-tool"), "phone still answers its prompts")
+        XCTAssertEqual(try String(contentsOf: URL(fileURLWithPath: argsFile.path + ".tokenset"), encoding: .utf8), "",
+                       "CLAUDE_CODE_OAUTH_TOKEN is left unset")
+        XCTAssertEqual(try String(contentsOf: URL(fileURLWithPath: argsFile.path + ".headless"), encoding: .utf8), "1")
+        r.stop(sessionId: s.id)
+    }
+
+    func testTerminalChatOpenInATerminalIsRefused() {
+        let s = terminalSession(open: true)
+        XCTAssertEqual(HeadlessRunner.terminalGuard(s)?.message, HeadlessRunner.openInTerminalMessage)
+        XCTAssertNil(HeadlessRunner.terminalGuard(terminalSession(open: false)))
+        XCTAssertNil(HeadlessRunner.terminalGuard(session()), "desktop chats aren't affected")
+        guard case .failure(let e) = runner().reply("x", session: s, profile: .terminal, activity: .idle) else {
+            return XCTFail("should refuse")
+        }
+        XCTAssertTrue(e.message.contains("open in a terminal"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: argsFile.path), "nothing ran")
     }
 
     func testBypassModeSkipsPromptTool() {

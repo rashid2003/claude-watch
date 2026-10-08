@@ -35,6 +35,7 @@ struct SessionRowView: View {
                         .truncationMode(.middle)
                     Text("·").foregroundStyle(.tertiary)
                 }
+                if session.info.isTerminalChat { TerminalTag() }
                 // The time always shows in full; a long account name gives way instead.
                 Text(Fmt.relativeAgo(session.info.lastActivityAt)).fixedSize()
                 Spacer(minLength: 4)
@@ -77,6 +78,7 @@ struct SessionRowView: View {
 
     private func detail(prompt: PendingPrompt?) -> (String, Color)? {
         if let prompt {
+            if prompt.viewOnly == true { return ("◆ \(prompt.toolName): \(prompt.summary) · answer in terminal", Theme.clay) }
             return prompt.kind == .permission
                 ? ("◆ \(prompt.toolName): \(prompt.summary)", Theme.clay)
                 : ("◆ question · answer on mac", Theme.clay)

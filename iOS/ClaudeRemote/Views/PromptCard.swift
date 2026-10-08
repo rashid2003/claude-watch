@@ -2,6 +2,7 @@ import SwiftUI
 import WatchProtocol
 
 /// A pending permission prompt (allow / always / deny), or a question that has to be answered on the Mac.
+/// A terminal chat's prompt without the prompt hook is view-only: it's answered in the terminal.
 struct PromptCard: View {
     @Environment(RemoteStore.self) private var store
     @Environment(AppLock.self) private var lock
@@ -40,7 +41,11 @@ struct PromptCard: View {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
-                buttons
+                if prompt.viewOnly == true {
+                    Text("Answer this in the terminal on the Mac").font(Theme.monoSmall).foregroundStyle(.secondary)
+                } else {
+                    buttons
+                }
             } else {
                 Text(prompt.summary).font(Theme.mono)
                 Text("answer on mac").font(Theme.monoSmall).foregroundStyle(.secondary)

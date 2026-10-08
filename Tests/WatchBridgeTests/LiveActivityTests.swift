@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import WatchBridge
 import WatchProtocol
@@ -86,6 +87,94 @@ final class LiveActivityTests: XCTestCase {
         var marked = limits()
         marked.connected = false
         XCTAssertTrue(try JSONDecoder().decode(LiveLimits.self, from: JSONEncoder().encode(marked)).disconnected)
+    }
+
+    // MARK: Going offline
+
+    func content(_ push: ActivityPush) throws -> (aps: [String: Any], content: [String: Any]) {
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: push.payload()) as? [String: Any])
+        let aps = try XCTUnwrap(obj["aps"] as? [String: Any])
+        return (aps, try XCTUnwrap(aps["content-state"] as? [String: Any]))
+    }
+
+    func testOfflinePushIsUrgentStaleAtOnceAndMarked() throws {
+        let push = ActivityPush.offline(limits(), reason: LiveLimits.Offline.sleep, macName: "Mac", now: t0)
+        XCTAssertEqual(push.event, .update)
+        XCTAssertEqual(push.priority, 10)
+        let (aps, content) = try content(push)
+        XCTAssertEqual(aps["event"] as? String, "update")
+        XCTAssertEqual(aps["stale-date"] as? Int, Int(t0.timeIntervalSince1970), "old widgets show offline via isStale")
+        XCTAssertEqual(aps["timestamp"] as? Int, Int(t0.timeIntervalSince1970))
+        XCTAssertEqual(content["offline"] as? String, "sleep")
+        XCTAssertEqual(content["connected"] as? Bool, false, "old widgets show offline via connected")
+        XCTAssertEqual(content["updated"] as? Double, t0.timeIntervalSince1970, "last seen stays the snapshot's time")
+        XCTAssertLessThan(push.payload().count, 4096)
+    }
+
+    func testOfflineFlagDecodesInTheContentState() throws {
+        let push = ActivityPush.offline(limits(), reason: LiveLimits.Offline.quit, macName: "Mac", now: t0)
+        let state = try JSONDecoder().decode(LiveLimits.self, from: JSONSerialization.data(withJSONObject: content(push).content))
+        XCTAssertEqual(state.offline, "quit")
+        XCTAssertTrue(state.disconnected)
+        XCTAssertEqual(state.accounts, limits().accounts)
+        // A reason this build doesn't know still decodes, and still reads as offline.
+        var future = try content(push).content
+        future["offline"] = "restart"
+        XCTAssertTrue(try JSONDecoder().decode(LiveLimits.self, from: JSONSerialization.data(withJSONObject: future)).disconnected)
+        // Ordinary pushes leave it out.
+        let normal = ActivityPush(event: .update, state: limits(), macName: "Mac", important: true, now: t0)
+        XCTAssertNil(try content(normal).content["offline"])
+    }
+
+    func testGoingOfflineTellsRunningActivitiesThenHoldsUntilWake() {
+        let d = LiveActivityDriver()
+        var off = device()
+        off.id = "dev-off"
+        off.liveActivity = false
+        var noToken = device(token: nil)
+        noToken.id = "dev-2"
+        _ = d.plan(for: device(), limits(), macName: "Mac", now: t0)
+        let sends = d.goingOffline([device(), off, noToken], limits(five: 50), reason: "sleep", macName: "Mac", now: t0 + 60)
+        XCTAssertEqual(sends.map(\.deviceId), ["dev-1"])
+        XCTAssertEqual(sends.first?.token, "tok")
+        XCTAssertEqual(sends.first?.push.state.offline, "sleep")
+        XCTAssertEqual(sends.first?.push.state.accounts.first?.five, 50)
+        XCTAssertTrue(d.isSuspended)
+        // Snapshots on the way down (or in a dark wake) don't undo it, not even a heartbeat or a state change.
+        XCTAssertTrue(d.plan(for: device(), limits(five: 100, state: .limited), macName: "Mac", now: t0 + 61).isEmpty)
+        XCTAssertTrue(d.plan(for: device(), limits(), macName: "Mac", now: t0 + 3600).isEmpty)
+        // Awake: the very next snapshot goes out at once, urgent and online.
+        d.resume()
+        XCTAssertFalse(d.isSuspended)
+        let back = d.plan(for: device(), limits(five: 50), macName: "Mac", now: t0 + 3601)
+        XCTAssertEqual(back.count, 1)
+        XCTAssertEqual(back.first?.push.priority, 10)
+        XCTAssertNil(back.first?.push.state.offline)
+        XCTAssertNil(back.first?.push.state.connected)
+        XCTAssertEqual(back.first?.push.staleDate, t0 + 3601 + ActivityPush.staleAfter)
+    }
+
+    func testPusherWithoutAKeySendsNothingAndSaysSo() {
+        let p = Pusher(key: nil)
+        let push = ActivityPush.offline(limits(), reason: "quit", macName: "Mac", now: t0)
+        XCTAssertNil(p.request(push, token: "tok", environment: nil))
+        let got = expectation(description: "done")
+        p.send(push, token: "tok", environment: nil, gone: {}, done: { status in
+            XCTAssertEqual(status, 0)
+            got.fulfill()
+        })
+        wait(for: [got], timeout: 1)
+    }
+
+    func testOfflineRequestIsAnUrgentLiveActivityPush() throws {
+        let key = APNsKey(keyId: "ABC123DEFG", teamId: "TEAM123456", pem: P256.Signing.PrivateKey().pemRepresentation, topic: "dev.x")
+        let push = ActivityPush.offline(limits(), reason: "sleep", macName: "Mac", now: t0)
+        let r = try XCTUnwrap(Pusher(key: key).request(push, token: "tok", environment: "sandbox"))
+        XCTAssertEqual(r.url?.absoluteString, "https://api.sandbox.push.apple.com/3/device/tok")
+        XCTAssertEqual(r.value(forHTTPHeaderField: "apns-priority"), "10")
+        XCTAssertEqual(r.value(forHTTPHeaderField: "apns-push-type"), "liveactivity")
+        XCTAssertEqual(r.value(forHTTPHeaderField: "apns-topic"), "dev.x.push-type.liveactivity")
+        XCTAssertEqual(r.httpBody, push.payload())
     }
 
     func testStartsRemotelyWhenWantedWithoutAnActivity() {

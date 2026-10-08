@@ -34,6 +34,10 @@ public struct Profile: Codable, Hashable, Sendable, Identifiable {
 
     public var isDefault: Bool { id == "default" }
 
+    /// Claude Code sessions run with the `claude` CLI in a terminal (not a desktop window).
+    public static let terminalId = "terminal"
+    public var isTerminal: Bool { id == Self.terminalId }
+
     public init(id: String, name: String, dataDir: URL, launcherApp: URL? = nil) {
         self.id = id; self.name = name; self.dataDir = dataDir; self.launcherApp = launcherApp
     }
@@ -105,6 +109,11 @@ public struct SessionInfo: Codable, Hashable, Sendable, Identifiable {
     public var hasPendingPermission: Bool
     public var recordModifiedAt: Date = .distantPast
     public var folder: String = ""     // "account/org" folder the record lives in
+    /// A chat run with the `claude` CLI in a terminal (nil from Macs without terminal support).
+    public var isTerminal: Bool? = nil
+    /// A terminal chat whose `claude` process is still running: reply and answer in the terminal.
+    public var openInTerminal: Bool? = nil
+    public var isTerminalChat: Bool { isTerminal == true || profileId == Profile.terminalId }
 
     public init(id: String, cliSessionId: String?, priorCliSessionIds: [String], profileId: String,
                 accountUuid: String, title: String, cwd: String, model: String?, permissionMode: String?,

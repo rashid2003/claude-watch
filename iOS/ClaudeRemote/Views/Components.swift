@@ -72,6 +72,7 @@ struct StatusStrip: View {
             .animation(.snappy, value: store.connection)
         }
         .padding(.vertical, 6)
+        VersionBanner()
     }
 
     private func updated(_ now: Date) -> String {
@@ -112,8 +113,56 @@ struct ConnectionBanner: View {
     }
 }
 
+/// "Update Session Watch from TestFlight" / "… on the Mac" when the two speak different protocol versions.
+/// Never blocks anything: what both understand keeps working.
+struct VersionBanner: View {
+    @Environment(RemoteStore.self) private var store
+
+    var body: some View {
+        if let hint = store.versionHint {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("↑").foregroundStyle(Theme.yellow).fixedSize()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(hint == .updatePhone ? "Update Session Watch from TestFlight" : "Update Session Watch on the Mac")
+                        .foregroundStyle(.primary)
+                    Text(hint == .updatePhone ? "Your Mac has a newer version; some features need the update."
+                                              : "This iPhone has a newer version than the Mac; some features need the update.")
+                        .font(Theme.monoTiny).foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                Spacer(minLength: 4)
+                Button {
+                    store.dismissedHint = hint
+                } label: {
+                    Image(systemName: "xmark").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss")
+            }
+            .font(Theme.monoSmall)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Theme.yellow.opacity(0.12)))
+            .padding(.bottom, 6)
+        }
+    }
+}
+
 /// Terminal-style placeholder: "○ no chats yet", with an optional hint line under it.
 /// `busy` swaps the glyph for the working spinner (e.g. while waiting for the first snapshot).
+/// Marks a chat run with `claude` in a terminal on the Mac (not in a desktop window).
+struct TerminalTag: View {
+    var body: some View {
+        Text("terminal")
+            .font(Theme.monoTiny)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Theme.hairline))
+            .fixedSize()
+            .accessibilityLabel("Terminal chat")
+    }
+}
+
 struct EmptyNote: View {
     let text: String
     var hint: String?

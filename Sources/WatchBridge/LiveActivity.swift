@@ -20,8 +20,20 @@ public struct ActivityPush: Sendable, Equatable {
     /// The activity shows as disconnected if nothing arrives for this long (the Mac asleep, quit or offline).
     public static let staleAfter: TimeInterval = LiveLimits.staleAfter
 
-    /// When the phone should treat this content as out of date; nil for an end.
-    public var staleDate: Date? { event == .end ? nil : now.addingTimeInterval(Self.staleAfter) }
+    /// The Mac's goodbye before it sleeps or quits: the latest numbers marked offline, sent at once.
+    public static func offline(_ state: LiveLimits, reason: String, macName: String, now: Date) -> ActivityPush {
+        ActivityPush(event: .update, state: state.goingOffline(reason), macName: macName, important: true, now: now)
+    }
+
+    /// The Mac said it is going away (sleep or quit).
+    public var isOffline: Bool { state.offline != nil }
+
+    /// When the phone should treat this content as out of date; nil for an end. A goodbye is stale at once, so even
+    /// widget builds that don't know `LiveLimits.offline` show the Mac as offline straight away.
+    public var staleDate: Date? {
+        if event == .end { return nil }
+        return isOffline ? now : now.addingTimeInterval(Self.staleAfter)
+    }
 
     public func payload() -> Data {
         let content = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(state))) ?? [:]
@@ -52,6 +64,10 @@ public struct ActivityPush: Sendable, Equatable {
 /// goes stale (and shows the Mac as offline) when the Mac stops sending. Heartbeats are priority 5, which Apple
 /// doesn't count against the push budget; one every 5 minutes is 12 an hour. Activities live 8 hours, so one near
 /// its end is replaced with a fresh one.
+///
+/// When the Mac sleeps or quits it sends each activity a last update marked offline (`goingOffline`) and then
+/// holds back until `resume`, so a snapshot taken on the way down can't undo it. After waking, the next snapshot
+/// goes out at once.
 public final class LiveActivityDriver: @unchecked Sendable {
     public static let minorInterval: TimeInterval = 120
     /// Well inside `ActivityPush.staleAfter`, so one late or dropped low-priority push doesn't show the Mac as offline.
@@ -65,12 +81,39 @@ public final class LiveActivityDriver: @unchecked Sendable {
     private let lock = NSLock()
     private var sent: [String: Sent] = [:]          // device id → last update sent to its current token
     private var startTried: [String: Date] = [:]
+    private var suspended = false
 
     public init() {}
+
+    /// The Mac is going to sleep or quitting: stops planning updates and returns the offline update for each running
+    /// activity. Devices without a running activity, or that switched it off, get nothing.
+    public func goingOffline(_ devices: [Device], _ limits: LiveLimits, reason: String, macName: String,
+                             now: Date = Date()) -> [(deviceId: String, token: String, push: ActivityPush)] {
+        lock.withLock {
+            suspended = true
+            return devices.compactMap { d in
+                guard d.liveActivity == true, let token = d.activityToken else { return nil }
+                let push = ActivityPush.offline(limits, reason: reason, macName: macName, now: now)
+                sent[d.id] = Sent(state: push.state, at: now)
+                return (d.id, token, push)
+            }
+        }
+    }
+
+    /// The Mac woke up: plan again, and send every activity the latest numbers on the next snapshot.
+    public func resume() {
+        lock.withLock {
+            suspended = false
+            sent = [:]
+        }
+    }
+
+    public var isSuspended: Bool { lock.withLock { suspended } }
 
     /// What to send to this device now, if anything. Call with every snapshot.
     public func plan(for d: Device, _ limits: LiveLimits, macName: String, now: Date = Date()) -> [(token: String, push: ActivityPush)] {
         lock.withLock {
+            guard !suspended else { return [] }
             guard d.liveActivity == true else {
                 sent[d.id] = nil
                 return d.activityToken.map { [($0, ActivityPush(event: .end, state: limits, macName: macName, important: true, now: now))] } ?? []
@@ -124,11 +167,26 @@ public final class LiveActivityDriver: @unchecked Sendable {
 }
 
 extension Pusher {
-    /// Sends a Live Activity push. `gone` runs when Apple says the token is no longer valid.
-    public func send(_ push: ActivityPush, token: String, environment: String?, gone: @escaping @Sendable () -> Void) {
-        guard let key, !token.isEmpty else { return }
+    /// Sends a Live Activity push. `gone` runs when Apple says the token is no longer valid. `done` runs once with
+    /// the HTTP status when Apple answered, or 0 when the push didn't go out (no key, no network).
+    public func send(_ push: ActivityPush, token: String, environment: String?, gone: @escaping @Sendable () -> Void,
+                     done: (@Sendable (Int) -> Void)? = nil) {
+        guard let r = request(push, token: token, environment: environment) else { done?(0); return }
+        session.dataTask(with: r) { [weak self] data, resp, err in
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            defer { done?(status) }
+            if status == 200 { return }
+            let reason = data.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }?["reason"] as? String
+            self?.lastError = "Live Activity push failed: \(reason ?? err?.localizedDescription ?? "HTTP \(status)")"
+            if status == 410 || reason == "BadDeviceToken" || reason == "Unregistered" { gone() }
+        }.resume()
+    }
+
+    /// The APNs request for a Live Activity push; nil without a key or token.
+    func request(_ push: ActivityPush, token: String, environment: String?) -> URLRequest? {
+        guard let key, !token.isEmpty else { return nil }
         let host = environment == "sandbox" ? "api.sandbox.push.apple.com" : "api.push.apple.com"
-        guard let url = URL(string: "https://\(host)/3/device/\(token)"), let jwt = try? jwt() else { return }
+        guard let url = URL(string: "https://\(host)/3/device/\(token)"), let jwt = try? jwt() else { return nil }
         var r = URLRequest(url: url)
         r.httpMethod = "POST"
         r.setValue("bearer \(jwt)", forHTTPHeaderField: "authorization")
@@ -136,12 +194,6 @@ extension Pusher {
         r.setValue("liveactivity", forHTTPHeaderField: "apns-push-type")
         r.setValue(String(push.priority), forHTTPHeaderField: "apns-priority")
         r.httpBody = push.payload()
-        session.dataTask(with: r) { [weak self] data, resp, err in
-            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            if status == 200 { return }
-            let reason = data.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }?["reason"] as? String
-            self?.lastError = "Live Activity push failed: \(reason ?? err?.localizedDescription ?? "HTTP \(status)")"
-            if status == 410 || reason == "BadDeviceToken" || reason == "Unregistered" { gone() }
-        }.resume()
+        return r
     }
 }

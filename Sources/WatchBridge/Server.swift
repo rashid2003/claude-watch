@@ -76,9 +76,14 @@ public extension MessageSource {
 public protocol BridgeHandler: AnyObject {
     func snapshot() -> Snapshot?
     func status(for device: Device) -> BridgeStatus
+    /// Older phones: `before` is an index into the whole chat.
     func messages(chatId: String, before: Int?, limit: Int) -> MessagesPage?
-    /// A feed for a chat plus the messages it has so far.
+    /// The page before `cursor` (a `MessagesPage.cursor`; nil = the newest), with its own `cursor`.
+    func messages(chatId: String, cursor: String?, limit: Int) -> MessagesPage?
+    /// A feed for a chat plus the messages it has so far (older phones, which page by index).
     func subscribe(chatId: String) -> (source: MessageSource, initial: [ChatMessage])?
+    /// A feed for a chat plus its newest `limit` messages, paged by cursor.
+    func subscribe(chatId: String, limit: Int) -> (source: MessageSource, page: MessagesPage)?
     func folders(profileId: String) -> [FolderSuggestion]
     /// Whether a folder exists and Claude Code trusts it; nil when the handler can't tell.
     func checkFolder(_ path: String) -> FolderCheck?
@@ -95,6 +100,20 @@ public protocol BridgeHandler: AnyObject {
 extension BridgeHandler {
     public func setDraft(chatId: String, text: String, device: Device) -> Bool { false }
     public func checkFolder(_ path: String) -> FolderCheck? { nil }
+
+    /// Index paging dressed as cursors, for handlers that only page by index.
+    public func messages(chatId: String, cursor: String?, limit: Int) -> MessagesPage? {
+        if let cursor, Int(cursor) == nil { return MessagesPage(messages: [], before: nil) }
+        return messages(chatId: chatId, before: cursor.flatMap(Int.init), limit: limit)
+            .map { MessagesPage(messages: $0.messages, before: nil, cursor: $0.before.map(String.init)) }
+    }
+
+    public func subscribe(chatId: String, limit: Int) -> (source: MessageSource, page: MessagesPage)? {
+        guard let sub = subscribe(chatId: chatId) else { return nil }
+        let start = max(0, sub.initial.count - limit)
+        return (sub.source, MessagesPage(messages: Array(sub.initial[start...]), before: nil,
+                                         cursor: start > 0 ? String(start) : nil))
+    }
 }
 
 public final class BridgeServer: @unchecked Sendable {
@@ -214,6 +233,9 @@ public final class BridgeServer: @unchecked Sendable {
         }
     }
 
+    /// Some phone has a live connection right now.
+    public var hasSocketClients: Bool { queue.sync { conns.values.contains { $0.isSocket } } }
+
     /// Chats some connected phone is subscribed to right now.
     public var watchedChats: Set<String> {
         queue.sync { Set(conns.values.compactMap { $0.isSocket ? $0.feed?.0 : nil }) }
@@ -240,7 +262,7 @@ public final class BridgeServer: @unchecked Sendable {
             guard let (chatId, feed) = c.feed else { continue }
             let new = feed.poll()
             if !new.isEmpty, let data = try? WireCoder.encoder.encode(
-                WSServerMessage.messages(chatId: chatId, messages: new, reset: false, before: nil)) {
+                WSServerMessage.messages(chatId: chatId, messages: new, reset: false, before: nil, cursor: nil)) {
                 c.sendText(data)
             }
             sendWork(c, chatId, feed)
@@ -357,13 +379,23 @@ public final class BridgeServer: @unchecked Sendable {
                 if let h = handler?.systemHealth(), let d = try? WireCoder.encoder.encode(WSServerMessage.system(h)) { conn.sendText(d) }
             case .subscribe:
                 conn.sentWork = nil
-                guard let id = m.chatId, let sub = handler?.subscribe(chatId: id) else { conn.feed = nil; return }
-                conn.feed = (id, sub.source)
-                let start = max(0, sub.initial.count - Self.initialBatch)
-                let msg = WSServerMessage.messages(chatId: id, messages: Array(sub.initial[start...]), reset: true,
-                                                   before: start > 0 ? start : nil)
+                guard let id = m.chatId else { conn.feed = nil; return }
+                let source: MessageSource, msg: WSServerMessage
+                if m.cursors == true {
+                    // Only the end of the transcript is read; older pages come by cursor.
+                    guard let sub = handler?.subscribe(chatId: id, limit: Self.initialBatch) else { conn.feed = nil; return }
+                    source = sub.source
+                    msg = .messages(chatId: id, messages: sub.page.messages, reset: true, before: nil, cursor: sub.page.cursor)
+                } else {
+                    guard let sub = handler?.subscribe(chatId: id) else { conn.feed = nil; return }
+                    source = sub.source
+                    let start = max(0, sub.initial.count - Self.initialBatch)
+                    msg = .messages(chatId: id, messages: Array(sub.initial[start...]), reset: true,
+                                    before: start > 0 ? start : nil, cursor: nil)
+                }
+                conn.feed = (id, source)
                 if let d = try? WireCoder.encoder.encode(msg) { conn.sendText(d) }
-                sendWork(conn, id, sub.source)
+                sendWork(conn, id, source)
             }
         default: break
         }
@@ -376,6 +408,7 @@ public final class BridgeServer: @unchecked Sendable {
         if req.method == "POST", p == ["pair"] { return conn.respond(pair(req)) }
         guard let device = devices.authenticate(req.bearer) else { return conn.respond(.error(401, "Not paired")) }
         devices.touch(device.id)
+        if let info = ClientInfo(headers: req.headers), devices.noteClient(device.id, info) { onDevicesChanged?() }
         conn.device = device
 
         if req.method == "GET", p == ["v1", "stream"] { return upgrade(req, conn) }
@@ -401,6 +434,7 @@ public final class BridgeServer: @unchecked Sendable {
         guard let body = req.decode(PairRequest.self) else { return .error(400, "Bad pairing request") }
         guard pairing.redeem(body.code) else { return .error(403, "That code is wrong or expired. Open Pair iPhone… on the Mac again.") }
         let (d, token) = devices.add(name: body.deviceName)
+        if let info = ClientInfo(headers: req.headers) { devices.noteClient(d.id, info) }
         audit.append(device: d.name, command: "pair", target: d.id, result: "done")
         onDevicesChanged?()
         return .json(PairResponse(token: token, deviceId: d.id, macName: macName))
@@ -414,8 +448,13 @@ public final class BridgeServer: @unchecked Sendable {
         case ("GET", 1, "snapshot"):
             return handler.snapshot().map { .json($0) } ?? .error(503, "No data yet")
         case ("GET", 3, "chats") where p[2] == "messages":
-            let page = handler.messages(chatId: p[1], before: req.query["before"].flatMap(Int.init),
-                                        limit: min(500, req.query["limit"].flatMap(Int.init) ?? 50))
+            let limit = min(500, req.query["limit"].flatMap(Int.init) ?? 50)
+            // `cursor` (empty for the newest page) from phones that page by cursor, `before` from older ones.
+            let page = if let c = req.query["cursor"] {
+                handler.messages(chatId: p[1], cursor: c.isEmpty ? nil : c, limit: limit)
+            } else {
+                handler.messages(chatId: p[1], before: req.query["before"].flatMap(Int.init), limit: limit)
+            }
             return page.map { .json($0) } ?? .error(404, "No such chat")
         case ("GET", 1, "folders"):
             return .json(handler.folders(profileId: req.query["profile"] ?? ""))

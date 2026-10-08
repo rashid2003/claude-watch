@@ -3,13 +3,13 @@
 The aim is for the phone to feel like the Claude app itself. You see what every chat is doing, answer it from anywhere, and never lose what you typed.
 
 Status: ✅ shipped · 🧪 on `next`, being tested in Session Watch Next · 🚧 in progress · 📋 planned.
-Last updated: 2026-10-08.
+Last updated: 2026-10-09.
 
 ## How work lands
 
 1. Each feature is built on its own `feat/*` branch, then merged into **`next`** (worktree `~/Development/claude-watch-next`).
 2. **Session Watch Next** (`VARIANT=next scripts/release-mac.sh`) runs next to the installed app: bundle `dev.lajward.SessionWatch.next`, data in `claude-watch-next`, port 7434, its own relay room. It's tested with the iPhone Simulator, so the installed Mac app and the TestFlight build on the phone stay untouched.
-3. When `next` holds up, it's merged to `main`, then Session Watch and TestFlight are released from it.
+3. When a task is done, it's merged to `main`, then Session Watch (Mac) and the TestFlight iPhone app are released from it. Session Watch Next is Mac-only: there is no iPhone Next app.
 
 ## Shipped
 
@@ -36,6 +36,10 @@ Last updated: 2026-10-08.
 | 🧪 | Scan cache v3 | `next` | Old caches rescan once so live work is right from the start (~1–2 min on first launch) |
 | 🧪 | Revokes are logged | `next` | `remote-log.jsonl` gets `revoke … by mac/phone`. A device list emptied at 06:37 today had no trace |
 | 🧪 | **See what a chat is doing, like the Claude app** | `feat/live-work` | `WorkTracker` follows running tool calls, subagents (their own `subagents/agent-*.jsonl` files) and background shells/monitors; ends them on results, task notifications (user entries, mid-turn `queued_command` and `task_status` attachments), TaskStop or interrupts. Phone: "live" panel under the tasks with timers and each subagent's current step; chats list shows `↳ 2 agents · Bash: swift test`. Checked in the Simulator against Session Watch Next |
+| 🧪 | **iPhone app version on the Mac; update hints** | `feat/devices-offline` | `WireProtocol.current = 2` (no number = 1; bump rules in `Versions.swift`). The phone sends `X-Session-Watch-Version/-Build/-Protocol` on every request; the Mac keeps `Device.client` and shows "App 1.3 (build) · protocol 2" under each paired device, with "Update Session Watch on this iPhone" when it's older. `/v1/status` carries `protocolVersion`; on a mismatch the phone shows a dismissible banner: "Update Session Watch from TestFlight" or "… on the Mac". Never blocks |
+| 🧪 | **Live Activity goes offline when the Mac sleeps or quits** | `feat/devices-offline` | On `willSleep` and on quit the Mac sends one priority-10 update with `offline: "sleep"/"quit"`, `connected: false` and a stale date of now (so older widget builds show offline too), waiting up to 2 s. Nothing more until `didWake`, when the next snapshot goes out at once. Says "Mac asleep" / "Mac app quit". A push that never left the Mac is retried on the next snapshot |
+| 🧪 | **Mac release script bumps the version** | `feat/release-tooling` | `scripts/MAC_VERSION` holds the last release. Default bumps the patch; `BUMP=minor\|major\|none` or `VERSION=x.y.z`. Written only after notarization succeeds, never for `VARIANT=next`. `DRY_RUN=1` prints the version and stops. No commits or tags |
+| 🧪 | **Relay metrics without content** | `feat/release-tooling` | Streams, bytes each way, errors by kind, auth failures, active Mac rooms; per deployment and in total. Rooms batch counters for 5 s into a `RelayMetrics` Durable Object. `GET /v1/metrics` with the `METRICS_TOKEN` secret. No payloads, ids, keys or IPs. Not deployed yet |
 
 ## Needs a real device
 
@@ -43,15 +47,18 @@ Last updated: 2026-10-08.
 - Live Activity offline look in every Dynamic Island size; no false "offline" from late low-priority pushes
 - Desktop → phone drafts: whether the Mac can tell which chat a Claude window shows (URL id or title). If it can't, desktop drafts never appear
 - Accessibility for Session Watch Next is a separate permission (its own bundle id)
+- Lid closed / Apple menu › Sleep: the Live Activity says "Mac asleep" within seconds; on wake it's current again without opening the app. Also quitting Session Watch ("Mac app quit"), and a dark wake (Power Nap) not flipping it back
+- The goodbye push leaves before Wi-Fi drops on sleep (the Mac waits at most 2 s); if not, it still goes stale after 12 min as before
+- Paired devices show the TestFlight build's version once it has connected; an old TestFlight build shows "version unknown" plus the update warning
 - Relay mode in the iPhone **Simulator**: the in-app `NWListener` never accepts (`SO_NECP_LISTENUUID failed`), so the Simulator shows "mac unreachable" over the relay. Use direct mode there (debug builds pair with `SIMCTL_CHILD_SW_PAIR='<QR JSON>'`). Real phones are unaffected
+
+## Needs you
+
+- **Relay metrics**: after `feat/release-tooling` is merged and the relay deployed, set the token once: `cd relay && npx wrangler secret put METRICS_TOKEN` (a long random value, e.g. `openssl rand -hex 24`). Until then `/v1/metrics` answers 404. Read: `curl -H "Authorization: Bearer <token>" https://relay.sessionwatch.lajward.co/v1/metrics`
+- **Mac release**: commit `scripts/MAC_VERSION` after a release ("Release the Mac app as x.y.z"); the script doesn't
 
 ## Later
 
-- Show the iPhone app version on the Mac's paired devices; warn when the phone is older than the Mac's protocol
-- Final "going offline" Live Activity push when the Mac sleeps or quits, so the activity shows offline right away
-- Release script bumps the Mac version automatically
-- Relay metrics (streams, errors) without logging content
-- Separate iPhone "Next" app (needs its own App Store Connect record) so phone builds can be tried without replacing the TestFlight app
 
 ## Decisions
 
