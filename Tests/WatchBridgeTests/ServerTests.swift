@@ -28,6 +28,8 @@ final class FakeHandler: BridgeHandler {
     }
     func folders(profileId: String) -> [FolderSuggestion] { [FolderSuggestion(cwd: "/tmp", lastUsedAt: Date())] }
     func usage(profileId: String) -> [UsageSample] { [] }
+    var health: SystemHealth?
+    func systemHealth() -> SystemHealth? { health }
     func check(_ command: BridgeCommand) -> (Int, String)? {
         if case .reply(let c, _) = command, busy.contains(c) { return (409, "Claude is still working") }
         return nil
@@ -178,5 +180,74 @@ final class ServerTests: XCTestCase {
         XCTAssertEqual(d.apnsToken, "abcd")
         XCTAssertFalse(d.wants(.finished))
         XCTAssertTrue(d.wants(.prompt))
+    }
+
+    static func health(history: Int = 3) -> SystemHealth {
+        SystemHealth(at: Date(timeIntervalSince1970: 1_790_600_000), level: .warn, reasons: ["swap 8.0/10 GB"],
+                     pressure: .ok, memTotal: 32 << 30, memUsed: 20 << 30, memCompressed: 3 << 30,
+                     swapUsed: 8 << 30, swapTotal: 10 << 30, diskFree: 80 << 30, diskTotal: 994 << 30,
+                     load1: 6, load5: 5, cores: 10, thermal: "nominal",
+                     apps: [AppUsage(id: "/Applications/Docker.app", name: "Docker", rss: 6 << 30, cpu: 40, processes: 7,
+                                     pids: [501, 502], mainPid: 501, canQuit: true, canKill: true)],
+                     cleanable: [], history: (0..<history).map {
+                         HealthPoint(at: Date(timeIntervalSince1970: Double(1_790_600_000 + $0 * 5)), memUsed: 1, swapUsed: 2, diskFree: 3, load1: 4)
+                     },
+                     auto: AutoActSummary(enabled: false, afterSeconds: 120, quitApps: [], closeIdleClaude: false, cleanTargets: []))
+    }
+
+    func testSystemRoutesAndCommands() async throws {
+        let token = try await pair()
+        let (none, _) = try await request("GET", "/v1/system", token: token)
+        XCTAssertEqual(none, 503)
+        handler.health = Self.health()
+        let (ok, data) = try await request("GET", "/v1/system", token: token)
+        XCTAssertEqual(ok, 200)
+        XCTAssertEqual(try WireCoder.decoder.decode(SystemHealth.self, from: data).history.count, 3)
+
+        let cases: [(String, Encodable, String)] = [
+            ("/v1/system/apps/quit", QuitAppBody(appId: "/Applications/Docker.app"), "quit-app"),
+            ("/v1/system/processes/kill", KillBody(pid: 4411), "kill"),
+            ("/v1/system/claude/close-idle", PlainCommand(), "close-idle-claude"),
+            ("/v1/system/disk/clean", CleanBody(targets: ["npm"]), "clean-disk"),
+            ("/v1/system/auto", AutoActBody(enabled: true), "auto-act"),
+        ]
+        for (path, body, name) in cases {
+            let (s, _) = try await request("POST", path, token: token, body: body)
+            XCTAssertEqual(s, 202, path)
+            XCTAssertEqual(handler.performed.last, name)
+        }
+        let (empty, _) = try await request("POST", "/v1/system/disk/clean", token: token, body: CleanBody(targets: []))
+        XCTAssertEqual(empty, 400)
+    }
+
+    func testWatchSystemStreamsReadings() async throws {
+        let token = try await pair()
+        handler.health = Self.health()
+        var r = URLRequest(url: URL(string: "ws://127.0.0.1:\(port)/v1/stream")!)
+        r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let ws = URLSession.shared.webSocketTask(with: r)
+        ws.resume()
+        func next() async throws -> WSServerMessage {
+            guard case .string(let s) = try await ws.receive() else { throw URLError(.badServerResponse) }
+            return try WireCoder.decoder.decode(WSServerMessage.self, from: Data(s.utf8))
+        }
+        func send(_ k: WSClientMessage.Kind) async throws {
+            try await ws.send(.string(String(decoding: try WireCoder.encoder.encode(WSClientMessage(type: k)), as: UTF8.self)))
+        }
+        guard case .snapshot = try await next() else { return XCTFail("snapshot first") }
+
+        server.publish(system: Self.health())          // nobody watching yet: not sent
+        try await send(.watchSystem)
+        guard case .system(let full) = try await next() else { return XCTFail("full reading on watch") }
+        XCTAssertEqual(full.history.count, 3)
+        server.publish(system: Self.health(history: 5))
+        guard case .system(let one) = try await next() else { return XCTFail("streamed reading") }
+        XCTAssertEqual(one.history.count, 1)
+
+        try await send(.unwatchSystem)
+        server.publish(system: Self.health())
+        try await send(.ping)
+        guard case .pong = try await next() else { return XCTFail("no reading after unwatch, just the pong") }
+        ws.cancel()
     }
 }
