@@ -319,13 +319,7 @@ struct ChatView: View {
             if session?.isWorking == true {
                 workingBar.transition(.opacity)
             }
-            if session?.info.openInTerminal == true {
-                // Two writers would corrupt the chat: the Mac refuses replies while the terminal has it open.
-                EmptyNote(text: "open in a terminal on the Mac", hint: "Reply there, or close it to reply from here.", glyph: "⌨")
-                    .padding(.vertical, -8)
-            } else {
-                composer
-            }
+            composer
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: prompts.map(\.id))
         .animation(.snappy, value: session?.isWorking)

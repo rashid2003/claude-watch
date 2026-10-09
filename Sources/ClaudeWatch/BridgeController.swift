@@ -380,7 +380,7 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         switch command {
         case .reply(let id, _):
             guard let s = session(id) else { return (404, "That chat isn't listed on the Mac any more") }
-            if let e = HeadlessRunner.terminalGuard(s.info) { return (409, e.message) }
+            if s.info.openInTerminal == true, s.activity == .waiting { return (409, TerminalInjector.waitingMessage) }
         case .answer(_, let pid, _):
             guard let p = snapshot()?.prompts.first(where: { $0.id == pid }) else { return (409, "That prompt is no longer pending") }
             if p.viewOnly == true { return (409, Self.answerInTerminal) }
@@ -444,8 +444,11 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
     /// Terminal chats always go in the background, as whoever the `claude` CLI is signed into.
     private func send(_ text: String, to s: SessionStatus) -> (JobStatus, String?) {
         guard let p = profile(s.info.profileId) else { return (.failed, "Chat not found") }
-        if let e = HeadlessRunner.terminalGuard(s.info) { return (.failed, e.message) }
         lock.withLock { sentAt[s.id] = Date() }
+        if s.info.openInTerminal == true {   // a live terminal owns the chat: type into it, never a second writer
+            if s.activity == .waiting { return (.failed, TerminalInjector.waitingMessage) }
+            return result(TerminalInjector().send(text, session: s.info, dataDir: p.dataDir))
+        }
         if !s.info.isTerminalChat, TokenStore.get(p.id) == nil {
             return result(UIRetry.type(message: text, session: s.info, profile: p).map { _ in "Typed into the \(p.name) window" })
         }
@@ -476,7 +479,6 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         switch command {
         case .reply(let id, let text):
             guard let s = session(id) else { return (.failed, "Chat not found") }
-            if let e = HeadlessRunner.terminalGuard(s.info) { return (.failed, e.message) }
             if isBusy(s) || replies.has(chatId: id) {   // behind earlier queued replies too, so order holds
                 replies.add(chatId: id, text: text)
                 republish()
