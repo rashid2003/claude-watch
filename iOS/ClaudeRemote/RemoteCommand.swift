@@ -44,8 +44,9 @@ struct RemoteCommand: Sendable {
         return .init("/v1/chats/\(seg(chatId))/stop", b, requestId: b.requestId, key: Keys.stop(chatId), label: "Stop")
     }
 
-    static func newChat(profileId: String, cwd: String, prompt: String, trust: Bool) -> RemoteCommand {
-        let b = NewChatBody(profileId: profileId, cwd: cwd, prompt: prompt, trust: trust ? true : nil)
+    static func newChat(profileId: String, cwd: String, prompt: String, trust: Bool,
+                        target: NewChatTarget = .desktop) -> RemoteCommand {
+        let b = NewChatBody(profileId: profileId, cwd: cwd, prompt: prompt, trust: trust ? true : nil, target: target)
         return .init("/v1/chats/new", b, requestId: b.requestId, key: Keys.newChat, label: "New chat")
     }
 

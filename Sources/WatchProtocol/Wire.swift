@@ -166,6 +166,8 @@ public struct PromptAnswerBody: Codable, Sendable {
     }
 }
 
+public enum NewChatTarget: String, Codable, Sendable { case desktop, terminal }
+
 public struct NewChatBody: Codable, Sendable {
     public var requestId: String
     public var profileId: String
@@ -174,8 +176,13 @@ public struct NewChatBody: Codable, Sendable {
     /// The phone confirmed trusting a folder Claude Code hasn't been trusted in yet. Without it the Mac
     /// refuses an untrusted folder; with it, it accepts the desktop's "Trust this workspace?" prompt.
     public var trust: Bool?
-    public init(requestId: String = UUID().uuidString, profileId: String, cwd: String, prompt: String, trust: Bool? = nil) {
+    /// Where the chat starts: the account's desktop window, or a background `claude` run (a terminal chat).
+    /// Absent from older phones, which mean the desktop.
+    public var target: NewChatTarget?
+    public init(requestId: String = UUID().uuidString, profileId: String, cwd: String, prompt: String, trust: Bool? = nil,
+                target: NewChatTarget? = nil) {
         self.requestId = requestId; self.profileId = profileId; self.cwd = cwd; self.prompt = prompt; self.trust = trust
+        self.target = target
     }
 }
 

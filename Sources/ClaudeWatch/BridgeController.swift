@@ -257,6 +257,13 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         lock.withLock { latest }?.accounts.lazy.flatMap(\.sessions).first { $0.id == id }
     }
 
+    /// The terminal (CLI config dir) profile signed into the same account as `p`, if there is one.
+    private func terminalProfile(for p: Profile) -> Profile? {
+        if p.isTerminal { return p }
+        guard let snap = lock.withLock({ latest }), let a = snap.account(forProfile: p.id) else { return nil }
+        return snap.profiles.first { a.memberProfileIds.contains($0.id) && $0.isTerminal }
+    }
+
     private func profile(_ id: String) -> Profile? {
         lock.withLock { latest }?.profiles.first { $0.id == id } ?? monitor.profile(id: id)
     }
@@ -389,9 +396,9 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             if s.info.isTerminalChat, !runner.isRunning(sessionId: id) { return (409, "Stop this chat in the terminal on the Mac") }
         case .move(let id, _):
             if session(id)?.info.isTerminalChat == true { return (409, "Terminal chats can't be moved to another window") }
-        case .newChat(let p, let cwd, let prompt, let trust):
+        case .newChat(let p, let cwd, let prompt, let trust, let target):
             guard let prof = profile(p) else { return (404, "Unknown account") }
-            if prof.isTerminal { return (400, "Start terminal chats in a terminal on the Mac") }
+            if target == .desktop, prof.isTerminal { return (400, "Start terminal chats in a terminal on the Mac") }
             guard FileManager.default.fileExists(atPath: cwd) else { return (400, "No such folder on the Mac: \(cwd)") }
             if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return (400, "Write a prompt first") }
             if !trust && !WorkspaceTrust.isTrusted(cwd) { return (409, DesktopActions.untrustedMessage) }
@@ -514,8 +521,17 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             if s.info.isTerminalChat { return (.failed, "Stop this chat in the terminal on the Mac") }
             return result(DesktopActions.stop(session: s.info, profile: p))
 
-        case .newChat(let pid, let cwd, let prompt, let trust):
-            guard let p = profile(pid), !p.isTerminal else { return (.failed, "Unknown account") }
+        case .newChat(let pid, let cwd, let prompt, let trust, let target):
+            guard let p = profile(pid), target == .terminal || !p.isTerminal else { return (.failed, "Unknown account") }
+            if target == .terminal {
+                // The account's own terminal login when it has one, else its desktop token.
+                let run = terminalProfile(for: p) ?? p
+                if !trust && !WorkspaceTrust.isTrusted(cwd) { return (.failed, DesktopActions.untrustedMessage) }
+                switch runner.start(prompt: prompt, cwd: cwd, profile: run) {
+                case .success: monitor.refreshNow(); return (.done, "Started in a background terminal run (\(run.name))")
+                case .failure(let e): return (.failed, e.message)
+                }
+            }
             let r = DesktopActions.newChat(profile: p, cwd: cwd, prompt: prompt, allowTrust: trust)
             monitor.refreshNow()
             return result(r)
