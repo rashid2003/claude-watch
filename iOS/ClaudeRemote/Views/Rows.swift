@@ -170,7 +170,7 @@ struct AccountRowView: View {
     }
 
     private var badge: String {
-        var b = account.running || account.state == .offline ? Theme.label(account.state) : "not running"
+        var b = account.running || [.offline, .working].contains(account.state) ? Theme.label(account.state) : "not running"
         if account.state == .limited, let u = account.limitedUntil { b += " · " + Fmt.time(u, now: now) }
         return b
     }

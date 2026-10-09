@@ -274,6 +274,8 @@ public final class Monitor {
                                                 profileId: d.profileId, now: now), live)
         }
         let (terminal, terminalLive) = CLIConfigDir.merge(perDir)
+        // Every `claude` process in a CLI dir, including desktop chats resumed in a terminal.
+        let cliLive = Set(perDir.flatMap { $0.live.map(\.sessionId) })
         let terminalIds = Set(terminal.map(\.id))
         let terminalDirs = dirs.filter { d in terminal.contains { $0.profileId == d.profileId } }
         let tasksRoot = Dictionary(terminalDirs.map { ($0.profileId, $0.tasks) }, uniquingKeysWith: { a, _ in a })
@@ -395,8 +397,10 @@ public final class Monitor {
 
             let pid = windows.isEmpty ? nil : ClaudeProcesses.pid(for: p, in: instances)
                 ?? windows.lazy.compactMap { ClaudeProcesses.pid(for: $0, in: instances) }.first
-            // An account with only terminal chats runs while one of its `claude` processes does.
-            let running = pid != nil || (windows.isEmpty && accountSessions.contains { $0.isTerminalChat && live.contains($0.id) })
+            // Its desktop window, or any `claude` process running one of its chats (desktop window closed or not).
+            let running = pid != nil || accountSessions.contains { s in
+                (s.isTerminalChat && live.contains(s.id)) || (s.priorCliSessionIds + [s.cliSessionId].compactMap { $0 }).contains(where: cliLive.contains)
+            }
             let activeHit = hits.filter { ($0.resetsAt ?? .distantPast) > now }.max { ($0.resetsAt ?? now) < ($1.resetsAt ?? now) }
             var limitedUntil = activeHit?.resetsAt
             var kind = activeHit?.kind
