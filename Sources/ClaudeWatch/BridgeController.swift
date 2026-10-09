@@ -391,6 +391,8 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
         case .answer(_, let pid, _):
             guard let p = snapshot()?.prompts.first(where: { $0.id == pid }) else { return (409, "That prompt is no longer pending") }
             if p.viewOnly == true { return (409, Self.answerInTerminal) }
+        case .sendNow(let rid):
+            guard replies.all.contains(where: { $0.id == rid }) else { return (404, "That message was already sent") }
         case .stop(let id):
             guard let s = session(id) else { return (404, "That chat isn't listed on the Mac any more") }
             if s.info.isTerminalChat, !runner.isRunning(sessionId: id) { return (409, "Stop this chat in the terminal on the Mac") }
@@ -463,6 +465,16 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
             .map { "Sent in the background (pid \($0))" })
     }
 
+    /// Stops whatever the chat is doing so a queued reply can go now.
+    private func interrupt(_ s: SessionStatus, profile p: Profile) -> Result<String, RetryError> {
+        if runner.stop(sessionId: s.id) { return .success("Interrupted the background run") }
+        if s.info.isTerminalChat {
+            guard s.info.openInTerminal == true else { return .failure(TerminalInjector.stopInTerminal) }
+            return TerminalInjector().interrupt(session: s.info, dataDir: p.dataDir)
+        }
+        return DesktopActions.stop(session: s.info, profile: p)
+    }
+
     /// Sends queued replies for chats that have gone idle, all of a chat's queued replies as one message.
     private func drainReplies(_ snap: Snapshot) {
         for id in replies.waitingChats {
@@ -492,6 +504,17 @@ final class BridgeController: BridgeHandler, @unchecked Sendable {
                 return (.done, "Queued. It's sent when Claude finishes this turn.")
             }
             return send(text, to: s)
+
+        case .sendNow(let rid):
+            guard let r = replies.all.first(where: { $0.id == rid }) else { return (.failed, "That message was already sent") }
+            guard let s = session(r.chatId), let p = profile(s.info.profileId) else { return (.failed, "Chat not found") }
+            if r.error != nil { replies.retry(id: rid) }
+            // Interrupt the turn; the drain sends the queue as soon as the chat reads idle.
+            if !isBusy(s) { monitor.refreshNow(); return (.done, "Sending") }
+            switch interrupt(s, profile: p) {
+            case .success(let how): republish(); monitor.refreshNow(); return (.done, how)
+            case .failure(let e): return (.failed, e.message)
+            }
 
         case .cancelReply(let rid):
             guard replies.remove(id: rid) else { return (.failed, "That message was already sent") }

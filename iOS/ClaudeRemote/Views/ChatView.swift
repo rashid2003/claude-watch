@@ -278,9 +278,9 @@ struct ChatView: View {
                         }
                     }
                     ForEach(queued) { r in
-                        QueuedReplyRow(reply: r, removing: store.isPending(Keys.queued(r.id))) {
-                            Task { await store.perform(.cancelReply(id: r.id)) }
-                        }
+                        QueuedReplyRow(reply: r, removing: store.isPending(Keys.queued(r.id)),
+                                       remove: { Task { await store.perform(.cancelReply(id: r.id)) } },
+                                       sendNow: { Task { await store.perform(.sendNow(id: r.id)) } })
                         .transition(.opacity)
                     }
                     if store.messagesStale && store.connection == .connected {

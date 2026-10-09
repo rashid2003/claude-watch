@@ -37,3 +37,15 @@ final class ReplyQueueTests: XCTestCase {
         XCTAssertEqual(ReplyQueue(url: url).all.map(\.id), [r.id])
     }
 }
+
+extension ReplyQueueTests {
+    func testRetryClearsErrorAndRequeues() {
+        let q = ReplyQueue(url: nil)
+        let r = q.add(chatId: "c", text: "x")
+        let taken = q.take(chatId: "c")
+        q.fail(taken, error: "boom")
+        XCTAssertFalse(q.has(chatId: "c"))
+        q.retry(id: r.id)
+        XCTAssertTrue(q.has(chatId: "c"))
+    }
+}
