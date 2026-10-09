@@ -37,6 +37,13 @@ public final class ReplyQueue: @unchecked Sendable {
         return found
     }
 
+    /// Clears a failed reply's error so it is sent again.
+    public func retry(id: String) {
+        mutate { list in
+            if let i = list.firstIndex(where: { $0.id == id }) { var r = list.remove(at: i); r.error = nil; list.append(r) }
+        }
+    }
+
     /// Takes every reply still to send for a chat, oldest first.
     public func take(chatId: String) -> [QueuedReply] {
         var taken: [QueuedReply] = []

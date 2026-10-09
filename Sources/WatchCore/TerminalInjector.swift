@@ -11,6 +11,8 @@ public struct TerminalInjector: Sendable {
         "Can't type into this terminal. Use Terminal, iTerm2 or tmux for chats you want to reply to from the phone"
     public static let waitingMessage = "Claude is waiting on a prompt in the terminal. Answer it there first"
 
+    public static let stopInTerminal = RetryError(message: "Stop this chat in the terminal on the Mac", permanent: true)
+
     private let exec: Exec
     private let tmuxPath: String?
     private let appRunning: @Sendable (String) -> Bool
@@ -33,18 +35,26 @@ public struct TerminalInjector: Sendable {
     }
 
     public func send(_ text: String, session: SessionInfo, dataDir: URL) -> Result<String, RetryError> {
+        deliver(Self.sanitize(text), bracketed: true, session: session, dataDir: dataDir)
+    }
+
+    /// Presses Esc in the chat's terminal: interrupts a turn Claude is working on.
+    public func interrupt(session: SessionInfo, dataDir: URL) -> Result<String, RetryError> {
+        deliver("\u{1B}", bracketed: false, session: session, dataDir: dataDir)
+    }
+
+    private func deliver(_ body: String, bracketed: Bool, session: SessionInfo, dataDir: URL) -> Result<String, RetryError> {
         guard let e = Self.entry(for: session, in: dataDir) else {
             return .failure(RetryError(message: "That terminal chat isn't running any more. Try again", permanent: false))
         }
         guard let tty = tty(pid: e.pid) else {
             return .failure(RetryError(message: "Couldn't find that chat's terminal", permanent: true))
         }
-        let body = Self.sanitize(text)
         if let pane = tmuxPane(tty: tty) {
-            return paste(tmux: pane, body)
+            return bracketed ? paste(tmux: pane, body) : key(tmux: pane, "Escape")
         }
         for app in [Self.iTerm, Self.terminalApp] where appRunning(app.process) {
-            switch type(app: app, tty: tty, body) {
+            switch type(app: app, tty: tty, body, bracketed: bracketed) {
             case .found: return .success("Typed into \(app.name)")
             case .failed(let why): return .failure(RetryError(message: why))
             case .notHere: continue
@@ -77,6 +87,12 @@ public struct TerminalInjector: Sendable {
         return nil
     }
 
+    private func key(tmux pane: String, _ name: String) -> Result<String, RetryError> {
+        guard let tmux = tmuxPath else { return .failure(RetryError(message: Self.unsupportedMessage, permanent: true)) }
+        let r = exec(tmux, ["send-keys", "-t", pane, name])
+        return r.status == 0 ? .success("Interrupted in tmux") : .failure(RetryError(message: "tmux refused: \(r.out)"))
+    }
+
     private func paste(tmux pane: String, _ body: String) -> Result<String, RetryError> {
         guard let tmux = tmuxPath else { return .failure(RetryError(message: Self.unsupportedMessage, permanent: true)) }
         let buf = "claudewatch-\(UUID().uuidString.prefix(8))"
@@ -94,8 +110,8 @@ public struct TerminalInjector: Sendable {
 
     enum Typed: Equatable { case found, notHere, failed(String) }
 
-    private func type(app: App, tty: String, _ body: String) -> Typed {
-        let r = exec("/usr/bin/osascript", ["-e", Self.script(app: app), tty, body])
+    private func type(app: App, tty: String, _ body: String, bracketed: Bool) -> Typed {
+        let r = exec("/usr/bin/osascript", ["-e", Self.script(app: app, bracketed: bracketed), tty, body])
         let out = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
         if r.status != 0 {
             return .failed(out.contains("-1743") || out.contains("not allowed")
@@ -106,11 +122,11 @@ public struct TerminalInjector: Sendable {
     }
 
     /// Finds the tab/session by tty and writes the bracketed paste. `write text` / `do script` add the Return.
-    static func script(app: App) -> String {
-        let paste = """
+    static func script(app: App, bracketed: Bool = true) -> String {
+        let paste = bracketed ? """
             set esc to ASCII character 27
             set payload to esc & "[200~" & body & esc & "[201~"
-            """
+            """ : "set payload to body"
         if app == iTerm {
             return """
             on run argv
@@ -122,7 +138,7 @@ public struct TerminalInjector: Sendable {
                   repeat with t in tabs of w
                     repeat with s in sessions of t
                       if tty of s is theTTY then
-                        tell s to write text payload
+                        tell s to write text payload\(bracketed ? "" : " newline NO")
                         return "ok"
                       end if
                     end repeat

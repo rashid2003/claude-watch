@@ -6,6 +6,7 @@ import WatchProtocol
 public enum BridgeCommand: Sendable {
     case reply(chatId: String, text: String)
     case cancelReply(id: String)
+    case sendNow(id: String)
     case answer(chatId: String, promptId: String, decision: PromptDecision)
     case stop(chatId: String)
     case newChat(profileId: String, cwd: String, prompt: String, trust: Bool, target: NewChatTarget)
@@ -26,6 +27,7 @@ public enum BridgeCommand: Sendable {
         switch self {
         case .reply: "reply"
         case .cancelReply: "cancel-reply"
+        case .sendNow: "send-now"
         case .answer: "prompt"
         case .stop: "stop"
         case .newChat: "new-chat"
@@ -48,7 +50,7 @@ public enum BridgeCommand: Sendable {
         switch self {
         case .reply(let c, _), .answer(let c, _, _), .stop(let c): c
         case .newChat(let p, _, _, _, _), .setMode(let p, _): p
-        case .retry(let i), .cancelRetry(let i), .cancelReply(let i): i
+        case .retry(let i), .cancelRetry(let i), .cancelReply(let i), .sendNow(let i): i
         case .move(let s, _): s
         case .undoMove(let i), .cancelMove(let i): i
         case .restartMoves, .closeIdleClaude: nil
@@ -507,6 +509,7 @@ public final class BridgeServer: @unchecked Sendable {
             cmd = req.decode(PromptAnswerBody.self).map { .answer(chatId: p[1], promptId: $0.promptId, decision: $0.decision) }
         case ("chats", 3, "stop"): cmd = .stop(chatId: p[1])
         case ("replies", 3, "cancel"): cmd = .cancelReply(id: p[1])
+        case ("replies", 3, "send-now"): cmd = .sendNow(id: p[1])
         case ("queue", 3, "retry"): cmd = .retry(itemId: p[1])
         case ("queue", 3, "cancel"): cmd = .cancelRetry(itemId: p[1])
         case ("accounts", 3, "mode"): cmd = req.decode(ModeBody.self).map { .setMode(profileId: p[1], mode: $0.mode) }

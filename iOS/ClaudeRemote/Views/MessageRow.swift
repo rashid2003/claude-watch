@@ -156,6 +156,7 @@ struct QueuedReplyRow: View {
     let reply: QueuedReply
     let removing: Bool
     let remove: () -> Void
+    var sendNow: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -175,9 +176,20 @@ struct QueuedReplyRow: View {
                 }
             }
             .font(Theme.mono)
-            Text(reply.error.map { "not sent · " + $0 } ?? "queued · sends when Claude finishes")
-                .font(Theme.monoTiny)
-                .foregroundStyle(reply.error == nil ? Color.secondary : Theme.red)
+            HStack(spacing: 8) {
+                Text(reply.error.map { "not sent · " + $0 } ?? "queued · sends when Claude finishes")
+                    .font(Theme.monoTiny)
+                    .foregroundStyle(reply.error == nil ? Color.secondary : Theme.red)
+                Spacer(minLength: 0)
+                if let sendNow, !removing {
+                    Button(action: sendNow) {
+                        Text(reply.error == nil ? "send now ⏎" : "retry ⏎").font(Theme.monoTiny).foregroundStyle(Theme.clay)
+                            .frame(minHeight: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(reply.error == nil ? "Interrupt Claude and send now" : "Retry sending")
+                }
+            }
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 8)

@@ -33,6 +33,11 @@ struct RemoteCommand: Sendable {
         return .init("/v1/replies/\(seg(id))/cancel", b, requestId: b.requestId, key: Keys.queued(id), label: "Remove")
     }
 
+    static func sendNow(id: String) -> RemoteCommand {
+        let b = PlainCommand()
+        return .init("/v1/replies/\(seg(id))/send-now", b, requestId: b.requestId, key: Keys.queued(id), label: "Send now")
+    }
+
     static func answer(chatId: String, promptId: String, decision: PromptDecision) -> RemoteCommand {
         let b = PromptAnswerBody(promptId: promptId, decision: decision)
         return .init("/v1/chats/\(seg(chatId))/prompt", b, requestId: b.requestId, key: Keys.prompt(promptId),
