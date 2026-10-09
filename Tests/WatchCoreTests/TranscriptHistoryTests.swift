@@ -226,6 +226,94 @@ final class TranscriptHistoryTests: XCTestCase {
         }
     }
 
+    /// Agents and shells started before the 4 MB tail window still show after opening the chat from its end,
+    /// with live work seeded from the scanner's full read, and end when their notifications arrive.
+    func testEarlyBackgroundWorkSurvivesTheTailWindow() throws {
+        func fixture(_ name: String) throws -> [Data] {
+            let u = Bundle.module.url(forResource: name, withExtension: "jsonl", subdirectory: "Fixtures/work")!
+            return try Data(contentsOf: u).split(separator: 0x0A).map { Data($0) }
+        }
+        // The fixture's start launches a foreground and a background agent, a background shell and a monitor;
+        // then over 4 MB of chat follows.
+        let start = try fixture("s1")
+        let text = String(repeating: "lorem ipsum ", count: 700)
+        var filler = (0..<640).map { i in
+            json(["type": "assistant", "uuid": "f\(i)", "isSidechain": false, "timestamp": "2026-10-08T10:00:12.000Z",
+                  "message": ["id": "fm\(i)", "content": [["type": "text", "text": "\(i) \(text)"]]]])
+        }
+        // Two more background shells inside the window: one before where the lagging scanner stops, one after.
+        func shell(_ n: Int) -> [Data] {
+            [json(["type": "assistant", "uuid": "sb\(n)", "isSidechain": false, "timestamp": "2026-10-08T10:00:13.000Z",
+                   "message": ["id": "sm\(n)", "content": [["type": "tool_use", "id": "tb\(n)", "name": "Bash",
+                                                             "input": ["command": "watch \(n)", "description": "Watch \(n)", "run_in_background": true]]]]]),
+             json(["type": "user", "uuid": "sr\(n)", "isSidechain": false, "timestamp": "2026-10-08T10:00:14.000Z",
+                   "toolUseResult": ["stdout": "", "stderr": "", "backgroundTaskId": "bg\(n)"],
+                   "message": ["role": "user", "content": [["type": "tool_result", "tool_use_id": "tb\(n)", "content": "started"]]]])]
+        }
+        filler.insert(contentsOf: shell(10), at: 600)
+        filler.insert(contentsOf: shell(9), at: 200)
+        let lines = start + filler
+        let url = try write(Data(lines.joined(separator: Data([0x0A]))) + Data([0x0A]))
+        let size = UInt64(try Data(contentsOf: url).count)
+        XCTAssertGreaterThan(size, TranscriptHistory.liveWindow)
+        let now = TranscriptScanner.parseISO("2026-10-08T10:00:30.000Z")!
+
+        // What the scanner keeps, read up to line `upTo`.
+        func scannerSeed(upTo: Int) -> WorkSeed {
+            let scanner = TranscriptScanner(cacheURL: URL(fileURLWithPath: "/dev/null"), projectsDir: URL(fileURLWithPath: "/nonexistent"))
+            var st = FileScanState(), b = TokenBuckets()
+            for l in lines[..<upTo] {
+                scanner.processLine(l, state: &st, buckets: &b, horizon: .distantPast)
+                st.offset += UInt64(l.count + 1)
+            }
+            return WorkSeed(tracker: st.work!, offset: st.offset)
+        }
+        let full = ChatFeed(url: url)
+        _ = full.poll()
+        let want = full.workTracker.live(now: now)
+        XCTAssertEqual(want.agents.map(\.id), ["ta1", "ta2"])
+        XCTAssertEqual(want.shells.map(\.id), ["bg1", "mon1", "bg9", "bg10"])
+
+        // Without a seed only the window is read: the early work is missing (what this fixes).
+        let bare = TranscriptCache(capacity: 2).open(url, limit: 20).feed
+        XCTAssertTrue(bare.workTracker.live(now: now).agents.isEmpty)
+
+        // The scanner up to date, or behind but inside the window (the rest is replayed once, not twice).
+        let windowStartLine = lines.count - 300   // inside the last 4 MB, between the two in-window shells
+        let h = TranscriptHistory(url: url)!
+        let lineStart = lines[..<windowStartLine].reduce(UInt64(0)) { $0 + UInt64($1.count + 1) }
+        let bg9 = UInt64(lines.prefix { !String(decoding: $0, as: UTF8.self).contains("\"sb9\"") }.reduce(0) { $0 + $1.count + 1 })
+        XCTAssertTrue(h.head < bg9 && bg9 < lineStart, "bg9 is in the window, before the lagging scanner's offset")
+        for upTo in [lines.count, windowStartLine] {
+            let seed = scannerSeed(upTo: upTo)
+            var asked = 0
+            let cache = TranscriptCache(capacity: 2, workSeed: { u in asked += 1; XCTAssertEqual(u, url); return seed })
+            let (page, feed) = cache.open(url, limit: 20)
+            XCTAssertEqual(asked, 1)
+            XCTAssertEqual(page.messages, Array(ChatFeed.messages(fromLines: lines).suffix(page.messages.count)))
+            XCTAssertEqual(feed.workTracker.live(now: now), want, "seeded up to line \(upTo)")
+            XCTAssertTrue(feed.workTracker.live(now: now).agents.contains { $0.id == "ta2" && $0.status == .running && $0.background })
+            XCTAssertTrue(feed.workTracker.live(now: now).shells.contains { $0.id == "bg1" && $0.status == .running })
+        }
+
+        // A seed that stops before the window would leave a gap: it's ignored.
+        let stale = TranscriptCache(capacity: 2, workSeed: { _ in scannerSeed(upTo: 3) }).open(url, limit: 20).feed
+        XCTAssertTrue(stale.workTracker.live(now: now).agents.isEmpty)
+
+        // The notifications arrive later: the background agent and shell end.
+        let cache = TranscriptCache(capacity: 2, workSeed: { _ in scannerSeed(upTo: lines.count) })
+        let (_, feed) = cache.open(url, limit: 20)
+        try append(try fixture("s1-more"), to: url)
+        _ = feed.poll()
+        _ = full.poll()
+        let later = TranscriptScanner.parseISO("2026-10-08T10:03:00.000Z")!
+        let after = feed.workTracker.live(now: later)
+        XCTAssertEqual(after, full.workTracker.live(now: later))
+        XCTAssertEqual(after.agents.first { $0.id == "ta2" }?.status, .done)
+        XCTAssertEqual(after.shells.first { $0.id == "bg1" }?.status, .stopped)
+        XCTAssertEqual(after.agents.filter { $0.id == "ta2" }.count, 1, "not counted twice")
+    }
+
     func testFastRangeMatchesRangeOnSlices() {
         let data = Data("xx{\"is_error\":true,\"tool_use_id\":\"t9\"}yy\"is_error\":true".utf8)
         let slice = data[5...]

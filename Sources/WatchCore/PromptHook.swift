@@ -87,9 +87,10 @@ public enum PromptHook {
     }
 }
 
-/// Adds or removes the prompt hook in Claude Code's user settings (`~/.claude/settings.json`).
+/// Adds or removes the prompt hook in Claude Code's user settings (`<config dir>/settings.json`).
 /// Only our own entry is touched; everything else in the file is kept. The file is backed up
-/// before every change.
+/// before every change. A symlinked settings.json (config dirs sharing one file, or dotfiles) is
+/// edited through the link: the link itself is never replaced.
 public enum PromptHookInstaller {
     public enum InstallError: Error, LocalizedError {
         case unreadable(String)
@@ -112,14 +113,14 @@ public enum PromptHookInstaller {
     }
 
     public static func isInstalled(settings url: URL) -> Bool {
-        guard let obj = JSONFile.object(at: url), let hooks = obj["hooks"] as? [String: Any],
+        guard let obj = JSONFile.object(at: realFile(url)), let hooks = obj["hooks"] as? [String: Any],
               let groups = hooks["PermissionRequest"] as? [Any] else { return false }
         return groups.contains { (($0 as? [String: Any])?["hooks"] as? [Any])?.contains(where: isOurs) == true }
     }
 
     /// Installs (or replaces) our hook entry. Idempotent.
     public static func install(settings link: URL, command: String, now: Date = Date()) throws {
-        let url = link.resolvingSymlinksInPath()   // a dotfiles symlink stays a symlink
+        let url = realFile(link)   // a symlink stays a symlink
         var obj = try load(url)
         var hooks = obj["hooks"] as? [String: Any] ?? [:]
         if obj["hooks"] != nil, obj["hooks"] as? [String: Any] == nil { throw InstallError.unreadable("\"hooks\" isn't an object") }
@@ -136,7 +137,7 @@ public enum PromptHookInstaller {
 
     /// Removes our hook entry, leaving everything else. No-op (no write) when it isn't there.
     public static func remove(settings link: URL, now: Date = Date()) throws {
-        let url = link.resolvingSymlinksInPath()
+        let url = realFile(link)
         guard FileManager.default.fileExists(atPath: url.path), isInstalled(settings: url) else { return }
         var obj = try load(url)
         guard var hooks = obj["hooks"] as? [String: Any] else { return }
@@ -144,6 +145,26 @@ public enum PromptHookInstaller {
         if groups.isEmpty { hooks["PermissionRequest"] = nil } else { hooks["PermissionRequest"] = groups }
         if hooks.isEmpty { obj["hooks"] = nil } else { obj["hooks"] = hooks }
         try save(obj, to: url, now: now)
+    }
+
+    /// The file a settings path really is: symlinks followed (relative ones against their folder), also
+    /// when the target doesn't exist yet, so writing it never turns the link into a plain file.
+    public static func realFile(_ link: URL) -> URL {
+        let fm = FileManager.default
+        var url = link.standardizedFileURL
+        for _ in 0..<16 {
+            guard let dest = try? fm.destinationOfSymbolicLink(atPath: url.path) else { break }
+            url = URL(fileURLWithPath: dest, relativeTo: url.deletingLastPathComponent()).standardizedFileURL
+        }
+        // The folders on the way may be symlinks too (a symlinked config dir).
+        let dir = url.deletingLastPathComponent().resolvingSymlinksInPath()
+        return dir.appendingPathComponent(url.lastPathComponent)
+    }
+
+    /// The distinct settings files behind several config dirs' settings.json (shared ones once, in order).
+    public static func files(_ links: [URL]) -> [URL] {
+        var seen = Set<String>()
+        return links.map(realFile).filter { seen.insert($0.path).inserted }
     }
 
     /// The PermissionRequest groups without our hooks (a group left with no hooks is dropped).

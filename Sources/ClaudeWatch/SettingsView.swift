@@ -124,6 +124,9 @@ struct SettingsView: View {
                 Toggle("Answer terminal prompts from iPhone",
                        isOn: Binding(get: { terminalHook.installed }, set: { terminalHook.set($0) }))
                     .disabled(!terminalHook.installed && (TerminalHookItem.cli == nil || !cfg.bridgeEnabled))
+                if !terminalHook.perDir.isEmpty {
+                    Text(terminalHook.perDir.joined(separator: " · ")).font(Theme.monoSmall).foregroundStyle(.secondary)
+                }
                 if let e = terminalHook.error {
                     Text(e).font(Theme.monoSmall).foregroundStyle(Theme.red)
                 }
@@ -243,29 +246,40 @@ private struct CommitTextField: View {
     }
 }
 
-/// "Answer terminal prompts from iPhone": our PermissionRequest hook in Claude Code's settings.json.
+/// "Answer terminal prompts from iPhone": our PermissionRequest hook in Claude Code's settings.json,
+/// in every CLI config dir's (dirs whose settings.json is a symlink to one file share one entry).
 struct TerminalHookItem {
-    var settings: URL = Paths.claudeSettings
     static var cli: String? { BridgeController.cliPath() }
 
+    private(set) var dirs: [CLIConfigDir] = []
     private(set) var installed = false
+    /// Per config dir ("~/.claude-1: off"), only when the dirs don't all share one settings file.
+    private(set) var perDir: [String] = []
     private(set) var error: String?
 
-    init(settings: URL = Paths.claudeSettings) {
-        self.settings = settings
-        refresh()
-    }
+    init() { refresh() }
 
-    mutating func refresh() { installed = PromptHookInstaller.isInstalled(settings: settings) }
+    mutating func refresh() {
+        dirs = CLIConfigDir.discover()
+        let files = PromptHookInstaller.files(dirs.map(\.settings))
+        installed = !files.isEmpty && files.allSatisfy { PromptHookInstaller.isInstalled(settings: $0) }
+        let home = Paths.home.path
+        perDir = files.count < 2 ? [] : dirs.map { d in
+            let name = d.dir.path.hasPrefix(home) ? "~" + d.dir.path.dropFirst(home.count) : d.dir.path
+            return name + ": " + (PromptHookInstaller.isInstalled(settings: d.settings) ? "on" : "off")
+        }
+    }
 
     mutating func set(_ on: Bool) {
         do {
-            if on {
-                guard let cli = Self.cli else { throw PromptHookInstaller.InstallError.unreadable("claude-watch CLI not found") }
-                try PromptHookInstaller.install(settings: settings,
-                                                command: PromptHookInstaller.command(cli: cli, socket: Paths.bridgeSocket))
-            } else {
-                try PromptHookInstaller.remove(settings: settings)
+            for file in PromptHookInstaller.files(dirs.map(\.settings)) {
+                if on {
+                    guard let cli = Self.cli else { throw PromptHookInstaller.InstallError.unreadable("claude-watch CLI not found") }
+                    try PromptHookInstaller.install(settings: file,
+                                                    command: PromptHookInstaller.command(cli: cli, socket: Paths.bridgeSocket))
+                } else {
+                    try PromptHookInstaller.remove(settings: file)
+                }
             }
             error = nil
         } catch {
