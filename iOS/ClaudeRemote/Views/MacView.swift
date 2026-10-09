@@ -98,6 +98,9 @@ struct MacView: View {
                 .padding(.bottom, 10)
 
                 Divider()
+                BuddySettingsRows()
+
+                Divider()
                 SectionTitle("security")
                 Toggle(isOn: $lock.enabled) {
                     HStack(spacing: 6) {
