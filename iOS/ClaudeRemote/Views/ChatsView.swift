@@ -33,6 +33,7 @@ struct ChatsView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 StatusStrip(section: filterName.map { "chats · \(AccountSwitcher.shortName($0))" } ?? "chats")
                 AccountSwitcher(selection: $accountFilter)
+                BuddyBanner()
                 if store.snapshot == nil {
                     Divider()
                     EmptyNote(text: "waiting for your mac…", hint: "chats appear once ClaudeWatch answers", busy: true)

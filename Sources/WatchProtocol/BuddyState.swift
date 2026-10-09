@@ -1,5 +1,4 @@
 import Foundation
-import WatchProtocol
 
 /// What the desktop buddy feels, most urgent first.
 public enum BuddyMood: String, CaseIterable, Sendable {

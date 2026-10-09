@@ -1,11 +1,10 @@
 import SwiftUI
-import WatchCore
 
 /// The characters the user can pick from. Each one draws itself from the same `BuddyPose`.
-enum BuddyStyle: String, CaseIterable, Identifiable {
+public enum BuddyStyle: String, CaseIterable, Identifiable, Sendable {
     case blobby, pixel, bot
-    var id: String { rawValue }
-    var title: String {
+    public var id: String { rawValue }
+    public var title: String {
         switch self { case .blobby: "Blobby"; case .pixel: "Pixel"; case .bot: "Bolt" }
     }
 }
@@ -62,8 +61,8 @@ struct BuddyPose {
 }
 
 /// Shared colors.
-enum BuddyPalette {
-    static func accent(_ m: BuddyMood) -> Color {
+public enum BuddyPalette {
+    public static func accent(_ m: BuddyMood) -> Color {
         switch m {
         case .needsYou: Color(red: 1.0, green: 0.62, blue: 0.1)
         case .error: Color(red: 0.93, green: 0.26, blue: 0.3)
@@ -75,14 +74,18 @@ enum BuddyPalette {
 }
 
 /// A character at one moment: `t` is seconds, `mood` the feeling. Draws in a 100×100 box.
-struct BuddyView: View {
+public struct BuddyView: View {
     var style: BuddyStyle
     var mood: BuddyMood
     var t: Double
     var speed: Double = 1
     var facingLeft = false
 
-    var body: some View {
+    public init(style: BuddyStyle, mood: BuddyMood, t: Double, speed: Double = 1, facingLeft: Bool = false) {
+        self.style = style; self.mood = mood; self.t = t; self.speed = speed; self.facingLeft = facingLeft
+    }
+
+    public var body: some View {
         let pose = BuddyPose.make(mood, t: t, speed: speed)
         ZStack {
             Canvas { ctx, size in
