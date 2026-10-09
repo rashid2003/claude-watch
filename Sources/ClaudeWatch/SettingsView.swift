@@ -27,6 +27,8 @@ struct SettingsView: View {
                 Section { Label(e, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.red) }
             }
 
+            BuddySettingsSection()
+
             Section {
                 Toggle("Show in menu bar", isOn: Binding(get: { cfg.showInMenuBar }, set: { model.setShowInMenuBar($0) }))
                     .disabled(cfg.showInMenuBar && !cfg.showInDock)
