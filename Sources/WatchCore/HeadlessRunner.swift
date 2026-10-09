@@ -53,18 +53,55 @@ public final class HeadlessRunner: @unchecked Sendable {
         }
         guard let bin = binary(profile) else { return .failure(RetryError(message: "claude CLI not found", permanent: true)) }
 
+        return launch(bin, Self.arguments(cli: cli, text: text, permissionMode: session.permissionMode,
+                                          promptTool: promptTool(session.id)),
+                      cwd: session.cwd, env: Self.environment(base: ProcessInfo.processInfo.environment, session: session,
+                                                              profile: profile, token: tok),
+                      sid: session.id)
+    }
+
+    /// Starts a new chat in `cwd` as a background run: `claude -p <prompt> --session-id <new id>`, with the
+    /// account's token (desktop account) or the config dir of `profile` (terminal profile). Returns the new
+    /// session id; the chat shows up in the Mac's list once the CLI writes its transcript.
+    public func start(prompt: String, cwd: String, profile: Profile) -> Result<String, RetryError> {
+        guard FileManager.default.fileExists(atPath: cwd) else {
+            return .failure(RetryError(message: "No such folder on the Mac: \(cwd)", permanent: true))
+        }
+        let tok: String? = profile.isTerminal ? nil : token(profile.id)
+        if !profile.isTerminal, tok == nil {
+            return .failure(RetryError(message: "No CLI token for \(profile.name). On the Mac run: claude-watch set-token \(profile.id)",
+                                       permanent: true, blocked: true))
+        }
+        guard let bin = binary(profile) else {
+            return .failure(RetryError(message: "claude CLI not found", permanent: true))
+        }
+        let sid = UUID().uuidString.lowercased()
+        var args = ["-p", prompt, "--session-id", sid, "--output-format", "json"]
+        if let tool = promptTool(sid), let cmd = tool.first {
+            let cfg: [String: Any] = ["mcpServers": ["claudewatch": ["command": cmd, "args": Array(tool.dropFirst())]]]
+            if let data = try? JSONSerialization.data(withJSONObject: cfg, options: [.sortedKeys]) {
+                args += ["--mcp-config", String(decoding: data, as: UTF8.self), "--permission-prompt-tool", Self.promptToolName]
+            }
+        }
+        let env = Self.environment(base: ProcessInfo.processInfo.environment, terminalProfile: profile.isTerminal ? profile : nil,
+                                   token: tok)
+        switch launch(bin, args, cwd: cwd, env: env, sid: sid) {
+        case .success: return .success(sid)
+        case .failure(let e): return .failure(e)
+        }
+    }
+
+    private func launch(_ bin: String, _ args: [String], cwd: String, env: [String: String],
+                        sid: String) -> Result<Int32, RetryError> {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: bin)
-        p.arguments = Self.arguments(cli: cli, text: text, permissionMode: session.permissionMode,
-                                     promptTool: promptTool(session.id))
-        if FileManager.default.fileExists(atPath: session.cwd) { p.currentDirectoryURL = URL(fileURLWithPath: session.cwd) }
-        p.environment = Self.environment(base: ProcessInfo.processInfo.environment, session: session,
-                                         profile: profile, token: tok)
-        let logURL = Paths.logs.appendingPathComponent("remote-\(session.id)-\(Int(Date().timeIntervalSince1970)).log")
+        p.arguments = args
+        if FileManager.default.fileExists(atPath: cwd) { p.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+        p.environment = env
+        let logURL = Paths.logs.appendingPathComponent("remote-\(sid)-\(Int(Date().timeIntervalSince1970)).log")
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         if let h = try? FileHandle(forWritingTo: logURL) { p.standardOutput = h; p.standardError = h }
         p.standardInput = FileHandle.nullDevice
-        let sid = session.id
         p.terminationHandler = { [weak self] proc in
             self?.lock.withLock { if self?.running[sid] === proc { self?.running[sid] = nil } }
             self?.onExit?(sid, proc.terminationStatus)
@@ -81,11 +118,16 @@ public final class HeadlessRunner: @unchecked Sendable {
     /// the default dir when the app has none), so it runs with that dir's own login and never another's.
     static func environment(base: [String: String], session: SessionInfo, profile: Profile, token: String?,
                             home: URL = Paths.home) -> [String: String] {
+        environment(base: base, terminalProfile: session.isTerminalChat ? profile : nil, token: token, home: home)
+    }
+
+    static func environment(base: [String: String], terminalProfile: Profile?, token: String?,
+                            home: URL = Paths.home) -> [String: String] {
         var env = base.filter {
             !$0.key.hasPrefix("CLAUDE_CODE_") && $0.key != "ANTHROPIC_API_KEY" && $0.key != "CLAUDECODE"
         }
         if let token { env["CLAUDE_CODE_OAUTH_TOKEN"] = token }
-        if session.isTerminalChat, profile.id != Profile.terminalId {
+        if let profile = terminalProfile, profile.id != Profile.terminalId {
             env["CLAUDE_CONFIG_DIR"] = CLIConfigDir(dir: profile.dataDir, isDefault: false, home: home).env
         }
         env[Self.headlessEnv] = "1"

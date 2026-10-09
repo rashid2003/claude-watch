@@ -8,7 +8,7 @@ public enum BridgeCommand: Sendable {
     case cancelReply(id: String)
     case answer(chatId: String, promptId: String, decision: PromptDecision)
     case stop(chatId: String)
-    case newChat(profileId: String, cwd: String, prompt: String, trust: Bool)
+    case newChat(profileId: String, cwd: String, prompt: String, trust: Bool, target: NewChatTarget)
     case retry(itemId: String)
     case cancelRetry(itemId: String)
     case setMode(profileId: String, mode: RetryMode)
@@ -47,7 +47,7 @@ public enum BridgeCommand: Sendable {
     public var target: String? {
         switch self {
         case .reply(let c, _), .answer(let c, _, _), .stop(let c): c
-        case .newChat(let p, _, _, _), .setMode(let p, _): p
+        case .newChat(let p, _, _, _, _), .setMode(let p, _): p
         case .retry(let i), .cancelRetry(let i), .cancelReply(let i): i
         case .move(let s, _): s
         case .undoMove(let i), .cancelMove(let i): i
@@ -499,7 +499,7 @@ public final class BridgeServer: @unchecked Sendable {
         switch (p.first, p.count, p.last) {
         case ("chats", 2, "new"):
             let b = req.decode(NewChatBody.self)
-            cmd = b.map { .newChat(profileId: $0.profileId, cwd: $0.cwd, prompt: $0.prompt, trust: $0.trust == true) }
+            cmd = b.map { .newChat(profileId: $0.profileId, cwd: $0.cwd, prompt: $0.prompt, trust: $0.trust == true, target: $0.target ?? .desktop) }
         case ("chats", 3, "reply"):
             let b = req.decode(ReplyBody.self)
             cmd = b.flatMap { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : .reply(chatId: p[1], text: $0.text) }

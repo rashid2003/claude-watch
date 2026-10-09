@@ -1,7 +1,7 @@
 import SwiftUI
 import WatchProtocol
 
-/// Starts a chat in an account's desktop window on the Mac. The account, folder and prompt are kept as
+/// Starts a chat on the Mac, in an account's desktop window or as a background terminal run. The account, folder and prompt are kept as
 /// a draft until the chat starts, so closing the sheet loses nothing.
 struct NewChatView: View {
     @Environment(RemoteStore.self) private var store
@@ -9,6 +9,8 @@ struct NewChatView: View {
     @Environment(\.dismiss) private var dismiss
 
     @AppStorage("newChat.profile") private var profileId = ""
+    /// The last choice stays the default: "desktop" or "terminal".
+    @AppStorage("newChat.target") private var targetRaw = NewChatTarget.desktop.rawValue
     @AppStorage("newChat.folder") private var cwd = ""
     @AppStorage("newChat.prompt") private var prompt = ""
     @State private var folders: [FolderSuggestion] = []
@@ -26,8 +28,11 @@ struct NewChatView: View {
     /// The desktop app cuts a linked prompt here.
     static let promptLimit = 14_000
 
-    /// Accounts with a desktop window (terminal chats are started in a terminal).
-    private var accounts: [AccountStatus] { (store.snapshot?.accounts ?? []).filter { !$0.profile.isTerminal } }
+    private var target: NewChatTarget { NewChatTarget(rawValue: targetRaw) ?? .desktop }
+    /// Desktop chats need an account with a desktop window; a terminal run can use any account.
+    private var accounts: [AccountStatus] {
+        (store.snapshot?.accounts ?? []).filter { target == .terminal || !$0.profile.isTerminal }
+    }
     private var folder: String { cwd.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var promptText: String { prompt.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -49,6 +54,8 @@ struct NewChatView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     ConnectionBanner().padding(.top, 8)
+                    targetSection
+                    Divider().padding(.top, 8)
                     accountSection
                     Divider().padding(.top, 8)
                     folderSection
@@ -60,7 +67,8 @@ struct NewChatView: View {
                 .padding(.bottom, 24)
                 .disabled(starting)
             }
-            .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(.immediately)
+            .scrollBounceBehavior(.basedOnSize)
             .screenBackground()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -87,6 +95,7 @@ struct NewChatView: View {
                 }
             }
             .task(id: profileId) { await loadFolders() }
+            .onChange(of: targetRaw) { pickAccount() }
             .task(id: folder) { await checkFolder() }
             .onAppear(perform: pickAccount)
             .onChange(of: accounts.map(\.id)) { pickAccount() }
@@ -94,6 +103,21 @@ struct NewChatView: View {
         .tint(Theme.clay)
         .toast()
         .interactiveDismissDisabled(starting)
+    }
+
+    // MARK: Target
+
+    @ViewBuilder private var targetSection: some View {
+        SectionTitle("start in")
+        Picker("Start in", selection: $targetRaw) {
+            Text("Claude desktop").tag(NewChatTarget.desktop.rawValue)
+            Text("Claude terminal").tag(NewChatTarget.terminal.rawValue)
+        }
+        .pickerStyle(.segmented)
+        .padding(.vertical, 4)
+        Text(target == .desktop ? "opens a chat in the account's Claude window on your mac"
+                                : "runs claude in the background on your mac, no window opens")
+            .font(Theme.monoSmall).foregroundStyle(.secondary).padding(.bottom, 4)
     }
 
     // MARK: Account
@@ -233,25 +257,19 @@ struct NewChatView: View {
                     .foregroundStyle(promptText.count > Self.promptLimit ? Theme.red : .secondary)
             }
         }
-        TextEditor(text: $prompt)
+        // A growing field, not a TextEditor: an editor scrolls on its own inside the page's ScrollView, so a
+        // finger on it fights the page for the drag and the sheet feels loose.
+        TextField("what should claude do?", text: $prompt, axis: .vertical)
             .font(Theme.mono)
-            .scrollContentBackground(.hidden)
-            .frame(minHeight: 140)
+            .lineLimit(6...24)
             .focused($focus, equals: .prompt)
-            .overlay(alignment: .topLeading) {
-                if prompt.isEmpty {
-                    Text("what should claude do?")
-                        .font(Theme.mono)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 8)
-                        .allowsHitTesting(false)
-                }
-            }
-            .padding(4)
+            .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
+            .padding(8)
             .background(RoundedRectangle(cornerRadius: 6).fill(Theme.code))
             .overlay(RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(focus == .prompt ? Theme.clay : Theme.hairline))
+            .contentShape(Rectangle())
+            .onTapGesture { focus = .prompt }
     }
 
     private var startRow: some View {
@@ -309,7 +327,7 @@ struct NewChatView: View {
             guard await lock.confirm(reason) else { return }
             starting = true
             defer { starting = false }
-            guard let job = await store.perform(.newChat(profileId: account.id, cwd: path, prompt: text, trust: trust)),
+            guard let job = await store.perform(.newChat(profileId: account.id, cwd: path, prompt: text, trust: trust, target: target)),
                   job.status == .done else { return }   // failures show as a toast on this sheet
             Haptics.send()
             prompt = ""

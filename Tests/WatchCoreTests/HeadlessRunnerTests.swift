@@ -124,6 +124,20 @@ final class HeadlessRunnerTests: XCTestCase {
         r.stop(sessionId: s.id)
     }
 
+    func testStartRunsANewChatInTheFolderWithAFreshSessionId() throws {
+        let r = runner(token: "desktop-token")
+        guard case .success(let sid) = r.start(prompt: "fix it", cwd: dir.path, profile: profile) else { return XCTFail("start") }
+        waitForFile(URL(fileURLWithPath: argsFile.path + ".headless"))
+        let args = try String(contentsOf: argsFile, encoding: .utf8).split(separator: "\n").map(String.init)
+        XCTAssertEqual(Array(args.prefix(4)), ["-p", "fix it", "--session-id", sid])
+        XCTAssertNotNil(UUID(uuidString: sid))
+        XCTAssertFalse(args.contains("--resume"))
+        r.stop(sessionId: sid)
+        guard case .failure(let e) = runner(token: nil).start(prompt: "x", cwd: dir.path, profile: profile) else { return XCTFail("no token") }
+        XCTAssertTrue(e.blocked)
+        guard case .failure = r.start(prompt: "x", cwd: dir.path + "/missing", profile: profile) else { return XCTFail("no folder") }
+    }
+
     func testReplyEnvironmentPerConfigDir() {
         let home = URL(fileURLWithPath: "/Users/me")
         let base = ["PATH": "/usr/bin", "CLAUDE_CONFIG_DIR": "/Users/me/.claude-9", "CLAUDE_CODE_ENTRYPOINT": "cli",
