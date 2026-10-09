@@ -21,16 +21,8 @@ public final class HeadlessRunner: @unchecked Sendable {
     public func isRunning(sessionId: String) -> Bool { lock.withLock { running[sessionId]?.isRunning ?? false } }
 
     public static let busyMessage = "Claude is still working on this chat. Stop it first, or wait."
-    public static let openInTerminalMessage = "This chat is open in a terminal on the Mac — reply there, or close it to reply from the phone"
     /// Set on every run's environment, so the terminal prompt hook stays out of phone-started runs.
     public static let headlessEnv = "CLAUDE_WATCH_HEADLESS"
-
-    /// Why a terminal chat can't take a reply from the phone right now, nil when it can.
-    public static func terminalGuard(_ s: SessionInfo) -> RetryError? {
-        guard s.isTerminalChat else { return nil }
-        if s.openInTerminal == true { return RetryError(message: openInTerminalMessage, permanent: true) }
-        return nil
-    }
 
     /// Starts the run and returns its pid. Refuses while the chat is working (two writers would corrupt it).
     public func reply(_ text: String, session: SessionInfo, profile: Profile,
@@ -38,7 +30,6 @@ public final class HeadlessRunner: @unchecked Sendable {
         if activity == .working || isRunning(sessionId: session.id) {
             return .failure(RetryError(message: Self.busyMessage, permanent: true))
         }
-        if let e = Self.terminalGuard(session) { return .failure(e) }
         guard let cli = session.cliSessionId else {
             return .failure(RetryError(message: "This chat has no CLI session yet", permanent: true))
         }

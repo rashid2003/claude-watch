@@ -174,18 +174,6 @@ final class HeadlessRunnerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: argsFile.path), "nothing ran")
     }
 
-    func testTerminalChatOpenInATerminalIsRefused() {
-        let s = terminalSession(open: true)
-        XCTAssertEqual(HeadlessRunner.terminalGuard(s)?.message, HeadlessRunner.openInTerminalMessage)
-        XCTAssertNil(HeadlessRunner.terminalGuard(terminalSession(open: false)))
-        XCTAssertNil(HeadlessRunner.terminalGuard(session()), "desktop chats aren't affected")
-        guard case .failure(let e) = runner().reply("x", session: s, profile: .terminal, activity: .idle) else {
-            return XCTFail("should refuse")
-        }
-        XCTAssertTrue(e.message.contains("open in a terminal"))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: argsFile.path), "nothing ran")
-    }
-
     func testBypassModeSkipsPromptTool() {
         let args = HeadlessRunner.arguments(cli: "c", text: "t", permissionMode: "bypassPermissions", promptTool: ["x"])
         XCTAssertFalse(args.contains("--permission-prompt-tool"))
