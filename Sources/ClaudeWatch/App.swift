@@ -811,6 +811,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The bundled CLI (prompt tool, headless replies) must use the same data folder as this build.
         if Paths.isSideBySide { setenv("CLAUDE_WATCH_DATA_FOLDER", Paths.dataFolder, 1) }
         LoginItem.registerOnFirstLaunch()
+        Task { @MainActor in BuddyController.shared.start(self.model) }
         // SwiftUI opens the main window as the first scene; make sure it's in front, also as an accessory app.
         DispatchQueue.main.async { self.model.showMain() }
     }
