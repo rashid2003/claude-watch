@@ -13,7 +13,11 @@ final class BuddyPet {
     private var phase = 0.0
     private var offset: CGFloat = 0
     let walk = PetWalk()
-    static let size = CGSize(width: 200, height: 190)
+    static let size = CGSize(width: 260, height: 320)   // room for the biggest pet and bubble
+    /// The panel hugs the pet and bubble so its transparent part doesn't block clicks.
+    private var wanted: CGSize {
+        CGSize(width: max(210, 112 * ctl.prefs.scale + 50), height: 112 * ctl.prefs.scale + (ctl.bubble != nil ? 66 : 6))
+    }
 
     init(_ ctl: BuddyController) { self.ctl = ctl }
 
@@ -46,6 +50,7 @@ final class BuddyPet {
         p.hidesOnDeactivate = false
         let host = NSHostingView(rootView: BuddyPetView(ctl: ctl, walk: walk))
         host.frame = CGRect(origin: .zero, size: Self.size)
+        host.autoresizingMask = [.width, .height]
         p.contentView = host
         panel = p
         let vf = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
@@ -63,9 +68,9 @@ final class BuddyPet {
             ctl.prefs.petHomeX = home.x
             return
         }
-        if ctl.mood == .busy {
+        if ctl.mood == .busy, ctl.prefs.walks {
             phase += (1 / 30) * 0.7 * ctl.speed
-            let reach = min(150, max(0, min(home.x - vf.minX, vf.maxX - Self.size.width - home.x)) + 40)
+            let reach = min(150, max(0, min(home.x - vf.minX, vf.maxX - wanted.width - home.x)) + 40)
             let target = CGFloat(sin(phase)) * reach
             walk.facingLeft = cos(phase) < 0
             offset += (target - offset) * 0.25
@@ -73,9 +78,11 @@ final class BuddyPet {
             offset *= 0.9
             if abs(offset) < 0.3 { offset = 0 }
         }
-        let x = min(max(home.x + offset, vf.minX), vf.maxX - Self.size.width)
+        let size = wanted
+        let x = min(max(home.x + offset, vf.minX), vf.maxX - size.width)
         let y = max(home.y, vf.minY - 4)
-        if abs(p.frame.origin.x - x) > 0.1 || abs(p.frame.origin.y - y) > 0.1 { p.setFrameOrigin(CGPoint(x: x, y: y)) }
+        let f = CGRect(x: x, y: y, width: size.width, height: size.height)
+        if abs(p.frame.minX - f.minX) > 0.1 || abs(p.frame.minY - f.minY) > 0.1 || p.frame.size != size { p.setFrame(f, display: true) }
     }
 }
 
@@ -88,6 +95,7 @@ struct BuddyPetView: View {
     @ObservedObject var walk: PetWalk
     @ObservedObject private var prefs = BuddyPrefs.shared
     @State private var hover = false
+    var side: CGFloat { 112 * prefs.scale }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -99,11 +107,11 @@ struct BuddyPetView: View {
             TimelineView(.animation) { tl in
                 BuddyView(style: prefs.style, mood: ctl.mood, t: tl.date.timeIntervalSinceReferenceDate,
                           speed: ctl.speed, facingLeft: walk.facingLeft)
-                    .frame(width: 112, height: 112)
+                    .frame(width: side, height: side)
                     .scaleEffect(hover ? 1.08 : 1, anchor: .bottom)
             }
         }
-        .frame(width: BuddyPet.size.width, height: BuddyPet.size.height, alignment: .bottom)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .animation(.spring(response: 0.35, dampingFraction: 0.6), value: ctl.bubble?.title)
         .animation(.easeOut(duration: 0.15), value: hover)
         .contentShape(Rectangle())

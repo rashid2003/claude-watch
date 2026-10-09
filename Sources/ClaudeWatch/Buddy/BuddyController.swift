@@ -21,7 +21,10 @@ final class BuddyController: ObservableObject {
     private lazy var menuBar = BuddyMenuBar(self)
 
     /// What to draw: a previewed mood wins over the real one.
-    var mood: BuddyMood { prefs.preview ?? state.mood }
+    var mood: BuddyMood {
+        if let p = prefs.preview { return p }
+        return state.mood == .celebrating && !prefs.celebrates ? .sleeping : state.mood
+    }
     /// How lively the busy walk is: more chats working, faster legs.
     var speed: Double { min(1.8, 1 + 0.2 * Double(max(0, state.working.count - 1))) }
 
@@ -71,6 +74,7 @@ final class BuddyController: ObservableObject {
 
     /// The speech bubble text, or nil when the buddy has nothing to say.
     var bubble: (title: String, subtitle: String)? {
+        guard prefs.showBubble else { return nil }
         let more = state.needsYou.count > 1 ? " (+\(state.needsYou.count - 1) more)" : ""
         switch mood {
         case .needsYou:

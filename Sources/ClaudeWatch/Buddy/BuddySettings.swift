@@ -10,6 +10,12 @@ struct BuddySettingsSection: View {
             Toggle("On the screen", isOn: $prefs.showPet)
             Toggle("In the Dock icon", isOn: $prefs.showDock)
             Toggle("In the menu bar", isOn: $prefs.showMenuBar)
+            Toggle("Walks around while chats work", isOn: $prefs.walks).disabled(!prefs.showPet)
+            Toggle("Speech bubble with the chat name", isOn: $prefs.showBubble).disabled(!prefs.showPet)
+            Toggle("Celebrates when a chat finishes", isOn: $prefs.celebrates)
+            LabeledContent("Size") {
+                Slider(value: $prefs.scale, in: 0.7...1.6).frame(width: 170)
+            }.disabled(!prefs.showPet)
             HStack(spacing: 10) {
                 ForEach(BuddyStyle.allCases) { s in
                     Button { prefs.style = s } label: {

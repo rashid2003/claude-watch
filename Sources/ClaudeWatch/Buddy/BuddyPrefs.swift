@@ -10,6 +10,11 @@ final class BuddyPrefs: ObservableObject {
     @Published var showPet: Bool { didSet { d.set(showPet, forKey: "buddy.pet") } }
     @Published var showDock: Bool { didSet { d.set(showDock, forKey: "buddy.dock") } }
     @Published var showMenuBar: Bool { didSet { d.set(showMenuBar, forKey: "buddy.menubar") } }
+    /// Screen pet size: 0.7 (small) to 1.6 (large).
+    @Published var scale: Double { didSet { d.set(scale, forKey: "buddy.scale") } }
+    @Published var walks: Bool { didSet { d.set(walks, forKey: "buddy.walks") } }
+    @Published var showBubble: Bool { didSet { d.set(showBubble, forKey: "buddy.bubble") } }
+    @Published var celebrates: Bool { didSet { d.set(celebrates, forKey: "buddy.celebrate") } }
     /// Forces a mood so you can see each animation; nil follows the real chats. Not saved.
     @Published var preview: BuddyMood?
 
@@ -20,6 +25,10 @@ final class BuddyPrefs: ObservableObject {
         showPet = d.object(forKey: "buddy.pet") as? Bool ?? true
         showDock = d.object(forKey: "buddy.dock") as? Bool ?? false
         showMenuBar = d.object(forKey: "buddy.menubar") as? Bool ?? false
+        scale = d.object(forKey: "buddy.scale") as? Double ?? 1
+        walks = d.object(forKey: "buddy.walks") as? Bool ?? true
+        showBubble = d.object(forKey: "buddy.bubble") as? Bool ?? true
+        celebrates = d.object(forKey: "buddy.celebrate") as? Bool ?? true
         #if DEBUG
         if let m = ProcessInfo.processInfo.environment["SW_BUDDY_MOOD"] { preview = BuddyMood(rawValue: m) }
         if let s = ProcessInfo.processInfo.environment["SW_BUDDY_STYLE"], let st = BuddyStyle(rawValue: s) { style = st }
