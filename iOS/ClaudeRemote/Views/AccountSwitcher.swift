@@ -130,7 +130,7 @@ struct AccountSwitcher: View {
     }
 
     private func stateLine(_ a: AccountStatus) -> String {
-        guard a.running || a.state == .offline else { return "not running" }
+        guard a.running || [.offline, .working].contains(a.state) else { return "not running" }
         var s = Theme.label(a.state)
         if a.state == .limited, let u = a.limitedUntil { s += " · " + Fmt.time(u, now: now) }
         return s
