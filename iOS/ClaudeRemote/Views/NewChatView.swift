@@ -67,7 +67,8 @@ struct NewChatView: View {
                 .padding(.bottom, 24)
                 .disabled(starting)
             }
-            .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(.immediately)
+            .scrollBounceBehavior(.basedOnSize)
             .screenBackground()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -256,25 +257,19 @@ struct NewChatView: View {
                     .foregroundStyle(promptText.count > Self.promptLimit ? Theme.red : .secondary)
             }
         }
-        TextEditor(text: $prompt)
+        // A growing field, not a TextEditor: an editor scrolls on its own inside the page's ScrollView, so a
+        // finger on it fights the page for the drag and the sheet feels loose.
+        TextField("what should claude do?", text: $prompt, axis: .vertical)
             .font(Theme.mono)
-            .scrollContentBackground(.hidden)
-            .frame(minHeight: 140)
+            .lineLimit(6...24)
             .focused($focus, equals: .prompt)
-            .overlay(alignment: .topLeading) {
-                if prompt.isEmpty {
-                    Text("what should claude do?")
-                        .font(Theme.mono)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 8)
-                        .allowsHitTesting(false)
-                }
-            }
-            .padding(4)
+            .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
+            .padding(8)
             .background(RoundedRectangle(cornerRadius: 6).fill(Theme.code))
             .overlay(RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(focus == .prompt ? Theme.clay : Theme.hairline))
+            .contentShape(Rectangle())
+            .onTapGesture { focus = .prompt }
     }
 
     private var startRow: some View {
