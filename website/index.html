@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Session Watch</title>
+<meta name="description" content="Session Watch keeps an eye on every Claude session running on your Mac — and puts them in your pocket. Watch, reply, approve and retry from anywhere.">
+<meta property="og:title" content="Session Watch">
+<meta property="og:description" content="Your Mac's AI coding sessions, in your pocket.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#"><span class="glyph">✻</span>session watch</a>
+    <div class="nav-links">
+      <a href="#features">features</a>
+      <a href="#buddy">buddy</a>
+      <a href="#privacy">privacy</a>
+      <a href="#install">install</a>
+      <a href="#pricing">pricing</a>
+      <a class="btn btn-primary btn-sm" href="#install">download</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<!-- ====================== hero ====================== -->
+<header class="hero">
+  <div class="hero-grid">
+    <div class="hero-copy">
+      <span class="eyebrow">mac + iphone · for claude code &amp; the claude app</span>
+      <h1>your claude sessions, everywhere.</h1>
+      <p class="dim">Session Watch keeps an eye on every Claude chat running on your Mac — every account, every terminal, every window — and puts them in your pocket. Read the stream live, reply, approve tool calls, and let it retry the moment your limit resets.</p>
+      <div class="hero-ctas">
+        <a class="btn btn-primary" href="#install">download for mac</a>
+        <a class="btn btn-outline" href="#install-iphone" data-tab-link="iphone">get the iphone app</a>
+      </div>
+      <span class="hero-note">free to watch · pro from $4.99/month · macOS 14+ · iOS 18+</span>
+      <div class="platform-row">
+        <span><span class="glyph">✓</span> claude desktop app</span>
+        <span><span class="glyph">✓</span> claude code in any terminal</span>
+        <span><span class="glyph">✓</span> multiple accounts &amp; orgs</span>
+      </div>
+    </div>
+    <div class="term" aria-label="a replay of session watch at work">
+      <div class="term-bar" aria-hidden="true">
+        <i class="lamp"></i><i class="lamp"></i><i class="lamp"></i>
+        <span>session watch — live</span>
+      </div>
+      <div class="term-body" id="term-demo"><div class="tl"><span class="t-faint">$</span> session watch <span class="cursor"></span></div></div>
+    </div>
+  </div>
+</header>
+
+<!-- ====================== features ====================== -->
+<section id="features" class="hairline-top">
+  <div class="section-head">
+    <span class="eyebrow">features</span>
+    <h2>it watches, so you don't have to.</h2>
+    <p class="dim">You kick off long Claude runs and walk away. Session Watch stays behind: it knows which chat is working, which one is waiting on you, and which account just hit its limit — and it can act on all three.</p>
+  </div>
+
+  <div class="feature-group">
+    <div class="group-label">on your iphone</div>
+    <div class="feature-cols">
+      <div class="feature"><span class="f-glyph">&gt;</span><h3>chat from anywhere</h3><p>Read chats live as they stream, reply, or stop a run. Replies sent while Claude is working queue up — or interrupt and send now.</p></div>
+      <div class="feature"><span class="f-glyph">◆</span><h3>allow / always / deny</h3><p>Permission prompts reach your phone as actionable notifications. Approve a tool call from the lock screen and the run keeps moving.</p></div>
+      <div class="feature"><span class="f-glyph">✻</span><h3>start new chats</h3><p>Open a fresh Claude session in any folder on your Mac, from your phone, in the account you choose.</p></div>
+      <div class="feature"><span class="f-glyph">↳</span><h3>live work panel</h3><p>Running tool calls, subagents and background shells with timers — fold the noise, watch what matters.</p></div>
+      <div class="feature"><span class="f-glyph">▸</span><h3>live activity &amp; widgets</h3><p>Usage limits on your Dynamic Island and lock screen. Home-screen widgets in every size, with Mac offline and asleep states.</p></div>
+      <div class="feature"><span class="f-glyph">✓</span><h3>face id lock</h3><p>The app locks behind Face ID, and approving permissions from a notification asks for it too.</p></div>
+    </div>
+  </div>
+
+  <div class="feature-group">
+    <div class="group-label">on your mac</div>
+    <div class="feature-cols">
+      <div class="feature"><span class="f-glyph">✶</span><h3>every account at a glance</h3><p>Watches all your Claude profiles and every Claude Code config dir. Free, working or limited — with live chats and task lists per account.</p></div>
+      <div class="feature"><span class="f-glyph">⟳</span><h3>auto-retry on reset</h3><p>Hit a usage limit mid-run? Session Watch forecasts the reset and sends “continue” the moment it lands — per account, verified against the transcript.</p></div>
+      <div class="feature"><span class="f-glyph">▸</span><h3>usage forecast</h3><p>5-hour and weekly usage with pace. It tells you how long until each cap — or “safe” when the window resets first.</p></div>
+      <div class="feature"><span class="f-glyph">&gt;</span><h3>open chats your way</h3><p>A chat opens where you choose: the Claude desktop app, your terminal (iTerm2, Terminal, tmux), or a Session Watch chat window with allow/deny and a reply box.</p></div>
+      <div class="feature"><span class="f-glyph">✢</span><h3>move chats</h3><p>Move conversations between Claude windows, accounts and orgs — with backups and undo.</p></div>
+      <div class="feature"><span class="f-glyph">✳</span><h3>system health</h3><p>Memory pressure, swap, CPU and disk with 30-minute trends. Alerts when the Mac is under pressure — and it can free memory and disk for you, automatically if you let it.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ====================== buddy ====================== -->
+<section id="buddy" class="hairline-top">
+  <div class="buddy-stage-wrap">
+    <div class="section-head" style="margin-bottom:0">
+      <span class="eyebrow">buddy</span>
+      <h2>a little friend who knows what your chats are doing.</h2>
+      <p class="dim">Buddy lives above your Dock, in your menu bar, or on the Dock tile. It walks while chats work, sleeps when all is quiet, and jumps up waving when a chat needs you — click it and you're in that chat. On the iphone it sits above your chat list.</p>
+      <p class="dim">Three characters: <b>blobby</b> the mint blob, <b>pixel</b> the retro critter, and <b>bolt</b> the little robot. Pick a mood below — this is the real thing, drawn from the same shapes as the app.</p>
+      <p class="dim small">Above the pet, a tiny list groups your chats: <span class="badge badge-clay">waiting for you</span> <span class="badge badge-green">done</span> <span class="badge badge-red">limited</span></p>
+    </div>
+    <div class="buddy-stage">
+      <div id="buddy-host" aria-live="off"></div>
+      <div class="mood-row" id="mood-row" role="group" aria-label="buddy mood">
+        <button class="mood-btn" data-mood="sleeping">sleeping</button>
+        <button class="mood-btn on" data-mood="busy">busy</button>
+        <button class="mood-btn" data-mood="needsyou">needs you</button>
+        <button class="mood-btn" data-mood="celebrating">celebrating</button>
+        <button class="mood-btn" data-mood="error">error</button>
+      </div>
+      <div>
+        <div class="char-row" id="char-row" role="group" aria-label="buddy character">
+          <button class="char-tile on" data-char="blobby" aria-label="blobby"></button>
+          <button class="char-tile" data-char="pixel" aria-label="pixel"></button>
+          <button class="char-tile" data-char="bolt" aria-label="bolt"></button>
+        </div>
+        <div class="char-names"><span>blobby</span><span>pixel</span><span>bolt</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====================== privacy ====================== -->
+<section id="privacy" class="hairline-top">
+  <div class="section-head">
+    <span class="eyebrow">private by design</span>
+    <h2>your code never leaves your machines.</h2>
+    <p class="dim">On the Mac, everything is read from local files — nothing is scraped from windows, nothing is sent anywhere. The phone connects through an end-to-end encrypted relay: the key is pinned in the pairing QR, so the relay only ever sees ciphertext. Both sides dial out, which means no open ports, no VPN, no Tailscale required.</p>
+  </div>
+  <div class="stat-row">
+    <div class="stat"><b>e2e</b><span>x25519 + chacha20-poly1305, key pinned at pairing</span></div>
+    <div class="stat"><b>0</b><span>open ports on your mac — both sides dial out</span></div>
+    <div class="stat"><b>25–50 mb</b><span>memory footprint, idle cpu near 0</span></div>
+    <div class="stat"><b>not collected</b><span>app-store privacy label: data not collected</span></div>
+  </div>
+</section>
+
+<!-- ====================== install ====================== -->
+<section id="install" class="hairline-top">
+  <div class="section-head">
+    <span class="eyebrow">install</span>
+    <h2>pick your way in.</h2>
+    <p class="dim">The Mac app is the heart — install it first. Pair the iphone in seconds with a QR code.</p>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab on" data-tab="mac" role="tab" aria-selected="true">mac</button>
+    <button class="tab" data-tab="iphone" role="tab" aria-selected="false">iphone</button>
+    <button class="tab" data-tab="android" role="tab" aria-selected="false">android</button>
+  </div>
+
+  <div class="tab-pane" data-pane="mac">
+    <div class="install-options">
+      <div class="install-card">
+        <h3><span class="glyph">▸</span> download the dmg <span class="badge badge-green">recommended</span></h3>
+        <p>Signed, notarized, universal (Apple silicon + Intel). Drag to Applications, done. Requires macOS 14 or newer.</p>
+        <div class="spacer"></div>
+        <a class="btn btn-primary" href="https://github.com/rashid2003/claude-watch/releases/latest" rel="noopener">download session watch for mac</a>
+        <span class="tiny dim">version 0.4.7 · ~10 mb · no kernel extensions, no daemons</span>
+      </div>
+      <div class="install-card">
+        <h3><span class="glyph">▸</span> homebrew <span class="badge badge-yellow">coming soon</span></h3>
+        <p>One command, updates with <code>brew upgrade</code>.</p>
+        <div class="copyline">
+          <pre><code>brew install --cask session-watch</code></pre>
+          <button class="copy-btn" data-copy="brew install --cask session-watch">copy</button>
+        </div>
+        <span class="tiny dim">the cask is on its way — the dmg works today</span>
+      </div>
+      <div class="install-card">
+        <h3><span class="glyph">▸</span> build from source</h3>
+        <p>For developers. Builds the app and the <code>claude-watch</code> terminal dashboard into your user folders.</p>
+        <div class="copyline">
+          <pre><code>git clone https://github.com/rashid2003/claude-watch
+cd claude-watch && ./install.sh</code></pre>
+          <button class="copy-btn" data-copy="git clone https://github.com/rashid2003/claude-watch && cd claude-watch && ./install.sh">copy</button>
+        </div>
+        <span class="tiny dim">needs xcode command line tools</span>
+      </div>
+    </div>
+    <p class="dim small" style="margin-top:18px">First launch asks for Notifications, Accessibility, and Automation for Claude — that's how replies get typed and retries get sent. Nothing else.</p>
+  </div>
+
+  <div class="tab-pane" data-pane="iphone" hidden id="install-iphone">
+    <div class="install-options">
+      <div class="install-card">
+        <h3><span class="glyph">▸</span> testflight <span class="badge badge-green">available now</span></h3>
+        <p>The iphone app is in open beta on TestFlight. Install, open, and point the camera at the QR code the Mac app shows you — paired in seconds.</p>
+        <div class="spacer"></div>
+        <a class="btn btn-primary" id="testflight-link" href="https://github.com/rashid2003/claude-watch#iphone" rel="noopener">join the testflight</a>
+        <span class="tiny dim">requires iOS 18 · pairs by QR or 6-digit code</span>
+      </div>
+      <div class="install-card">
+        <h3><span class="glyph">▸</span> app store <span class="badge badge-yellow">coming soon</span></h3>
+        <p>The App Store release is in review preparation. TestFlight builds carry you until then — and there's a <b>demo mode</b> inside the app if you want to feel it before pairing.</p>
+      </div>
+      <div class="install-card">
+        <h3><span class="glyph">▸</span> works away from home</h3>
+        <ul class="req-list">
+          <li>end-to-end encrypted relay, on by default</li>
+          <li>or your own tailnet (tailscale), or direct wi-fi</li>
+          <li>push notifications, live activity, widgets</li>
+          <li>offline cache — reread chats with no signal</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-pane" data-pane="android" hidden>
+    <div class="install-options">
+      <div class="install-card">
+        <h3><span class="glyph">▸</span> android <span class="badge badge-yellow">on the roadmap</span></h3>
+        <p>The android app isn't built yet — the relay protocol is open in the repo, and the Mac side already speaks it. Want it sooner? Tell us:</p>
+        <div class="copyline">
+          <pre><code>hello@lajward.dev</code></pre>
+          <button class="copy-btn" data-copy="hello@lajward.dev">copy</button>
+        </div>
+        <span class="tiny dim">subject “android” — we'll email you when the beta opens</span>
+      </div>
+      <div class="install-card">
+        <h3><span class="glyph">▸</span> meanwhile, any phone browser</h3>
+        <p>The Mac app's chat windows and the terminal dashboard work today; a lightweight web view for any phone is being explored alongside the android build.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====================== pricing ====================== -->
+<section id="pricing" class="hairline-top">
+  <div class="section-head">
+    <span class="eyebrow">pricing</span>
+    <h2>free to watch. pro to act from anywhere.</h2>
+    <p class="dim">Everything on the Mac is free, forever. Pro unlocks the iphone remote — the relay, push, live activities — and keeps the project alive.</p>
+  </div>
+  <div class="price-grid">
+    <div class="price-card">
+      <h3>free</h3>
+      <div class="amount">$0</div>
+      <ul>
+        <li>full mac app — watching, usage, forecasts</li>
+        <li>buddy pet, menu bar &amp; dock</li>
+        <li>auto-retry on limit reset</li>
+        <li>system health &amp; cleanup</li>
+        <li class="no">iphone remote</li>
+      </ul>
+      <a class="btn btn-outline" href="#install">download</a>
+    </div>
+    <div class="price-card">
+      <h3>pro monthly</h3>
+      <div class="amount" data-price="pro_monthly">$4.99<small>/month</small></div>
+      <ul>
+        <li>everything in free</li>
+        <li>iphone app with e2e relay</li>
+        <li>push notifications &amp; lock-screen approvals</li>
+        <li>live activity, widgets, face id lock</li>
+      </ul>
+      <a class="btn btn-outline" href="pricing.html">choose monthly</a>
+    </div>
+    <div class="price-card hot">
+      <span class="flag">2 months free</span>
+      <h3>pro yearly</h3>
+      <div class="amount" data-price="pro_yearly">$39<small>/year</small></div>
+      <ul>
+        <li>everything in pro</li>
+        <li>one bill a year, cancel anytime</li>
+        <li>priority on feature requests</li>
+      </ul>
+      <a class="btn btn-primary" href="pricing.html">choose yearly</a>
+    </div>
+    <div class="price-card">
+      <h3>lifetime</h3>
+      <div class="amount" data-price="lifetime">$99<small> once</small></div>
+      <ul>
+        <li>everything in pro, forever</li>
+        <li>every future update included</li>
+        <li>for people who hate subscriptions</li>
+      </ul>
+      <a class="btn btn-outline" href="pricing.html">buy once</a>
+    </div>
+  </div>
+  <p class="price-foot">Have a discount code? Enter it at <a href="pricing.html">checkout</a>. Payments by Stripe · cancel anytime · 14-day refund, no questions.</p>
+</section>
+
+<!-- ====================== faq ====================== -->
+<section id="faq" class="hairline-top">
+  <div class="section-head">
+    <span class="eyebrow">faq</span>
+    <h2>questions people actually ask.</h2>
+  </div>
+  <div class="faq">
+    <details>
+      <summary>what exactly does it watch?</summary>
+      <div class="a"><p>The Claude desktop app (every profile you run, including extra accounts and orgs) and Claude Code running in any terminal. Session Watch reads the transcript files Claude writes locally — it never scrapes your screen and never injects anything you didn't ask for.</p></div>
+    </details>
+    <details>
+      <summary>does my code or conversation go through your servers?</summary>
+      <div class="a"><p>No. On the Mac, everything is read from local files. The phone connection is end-to-end encrypted — the encryption key is created on your Mac and pinned into the pairing QR code, so the relay forwards ciphertext it cannot read. If you prefer, switch to direct Wi-Fi or your own tailnet and skip the relay entirely.</p></div>
+    </details>
+    <details>
+      <summary>what happens when my mac sleeps or goes offline?</summary>
+      <div class="a"><p>The iphone app says so — the live activity and widgets show mac offline and asleep states, and your cached chats stay readable. When the Mac is back, everything picks up where it left off.</p></div>
+    </details>
+    <details>
+      <summary>how does auto-retry work?</summary>
+      <div class="a"><p>When an account hits its usage limit, Session Watch forecasts the reset time and queues a retry. The moment the window resets, it sends “continue” — through the desktop app or the CLI, your choice per account — and verifies against the transcript that the run actually resumed.</p></div>
+    </details>
+    <details>
+      <summary>why isn't the mac app in the mac app store?</summary>
+      <div class="a"><p>The App Store requires the sandbox, and the sandbox forbids the Accessibility and Automation permissions that let Session Watch type replies and answer prompts for you. So it ships as a signed, notarized download instead — Gatekeeper checks it like any other developer-signed app.</p></div>
+    </details>
+    <details>
+      <summary>is this an official anthropic product?</summary>
+      <div class="a"><p>No. Session Watch is an independent tool and is not affiliated with or endorsed by Anthropic. Claude is a trademark of Anthropic, PBC.</p></div>
+    </details>
+    <details>
+      <summary>what if i cancel?</summary>
+      <div class="a"><p>The Mac app keeps working in full — it's free. The iphone remote stops at the end of your paid period. And within the first 14 days, email us for a full refund, no questions asked.</p></div>
+    </details>
+  </div>
+</section>
+
+</div><!-- /wrap -->
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <a class="brand" href="#"><span class="glyph">✻</span>session watch</a>
+      <a href="privacy.html">privacy</a>
+      <a href="pricing.html">pricing</a>
+      <a href="https://github.com/rashid2003/claude-watch" rel="noopener">github</a>
+      <a href="mailto:hello@lajward.dev">hello@lajward.dev</a>
+    </div>
+    <p class="foot-note">© 2026 lajward · Session Watch is an independent tool, not affiliated with or endorsed by Anthropic. Claude is a trademark of Anthropic, PBC. Made with ✻ and a small mint blob.</p>
+  </div>
+</footer>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script src="assets/buddy.js"></script>
+<script src="assets/terminal.js"></script>
+<script src="assets/billing.js"></script>
+<script>
+(function () {
+  "use strict";
+  // buddy stage
+  var host = document.getElementById("buddy-host");
+  var charName = "blobby", mood = "busy";
+  Buddy.mount(host, charName, mood);
+  document.getElementById("mood-row").addEventListener("click", function (e) {
+    var b = e.target.closest(".mood-btn"); if (!b) return;
+    mood = b.getAttribute("data-mood");
+    this.querySelectorAll(".mood-btn").forEach(function (x) { x.classList.toggle("on", x === b); });
+    Buddy.setMood(host, mood);
+  });
+  // character tiles get mini static buddies
+  document.querySelectorAll(".char-tile").forEach(function (tile) {
+    var mini = document.createElement("div");
+    tile.appendChild(mini);
+    Buddy.mount(mini, tile.getAttribute("data-char"), "busy");
+  });
+  document.getElementById("char-row").addEventListener("click", function (e) {
+    var t = e.target.closest(".char-tile"); if (!t) return;
+    charName = t.getAttribute("data-char");
+    this.querySelectorAll(".char-tile").forEach(function (x) { x.classList.toggle("on", x === t); });
+    Buddy.mount(host, charName, mood);
+  });
+
+  // install tabs
+  function showTab(name) {
+    document.querySelectorAll(".tab").forEach(function (t) {
+      var on = t.getAttribute("data-tab") === name;
+      t.classList.toggle("on", on); t.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    document.querySelectorAll(".tab-pane").forEach(function (p) {
+      p.hidden = p.getAttribute("data-pane") !== name;
+    });
+  }
+  document.querySelectorAll(".tab").forEach(function (t) {
+    t.addEventListener("click", function () { showTab(t.getAttribute("data-tab")); });
+  });
+  document.querySelectorAll("[data-tab-link]").forEach(function (a) {
+    a.addEventListener("click", function () { showTab(a.getAttribute("data-tab-link")); });
+  });
+
+  // copy buttons
+  var toast = document.getElementById("toast");
+  function say(msg) {
+    toast.textContent = msg; toast.classList.add("show");
+    setTimeout(function () { toast.classList.remove("show"); }, 1800);
+  }
+  document.querySelectorAll("[data-copy]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var text = b.getAttribute("data-copy");
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { say("copied"); },
+          function () { say("select and copy manually"); });
+      } else { say("select and copy manually"); }
+    });
+  });
+})();
+</script>
+</body>
+</html>

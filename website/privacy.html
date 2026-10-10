@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Session Watch Privacy</title>
+<meta name="description" content="What Session Watch reads, what it stores, and what it never sends anywhere.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="index.html"><span class="glyph">✻</span>session watch</a>
+    <div class="nav-links">
+      <a href="index.html#features">features</a>
+      <a href="pricing.html">pricing</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+<section>
+  <div class="section-head">
+    <span class="eyebrow">privacy</span>
+    <h2>the short version: we can't read your stuff.</h2>
+    <p class="dim">Updated October 2026. This covers the Mac app, the iphone app, the relay, and this website.</p>
+  </div>
+
+  <div class="stack" style="gap:32px; max-width:72ch">
+    <div class="stack" style="gap:8px">
+      <h3><span class="glyph">▸</span> the mac app</h3>
+      <p class="dim small">Reads Claude's transcript and config files on your own disk to show you what your sessions are doing. It does not send your conversations, code, usage data or anything else to us or to any third party. There is no analytics, no telemetry, no crash reporter phoning home.</p>
+    </div>
+    <div class="stack" style="gap:8px">
+      <h3><span class="glyph">▸</span> the iphone connection</h3>
+      <p class="dim small">Your phone and Mac talk over an end-to-end encrypted channel (X25519 key agreement, ChaCha20-Poly1305 encryption). The key is generated on your Mac and transferred to the phone inside the pairing QR code — it never touches a server. When the relay is used, it forwards opaque ciphertext and keeps no message content. You can bypass the relay entirely with direct Wi-Fi or your own tailnet.</p>
+    </div>
+    <div class="stack" style="gap:8px">
+      <h3><span class="glyph">▸</span> push notifications</h3>
+      <p class="dim small">Notification payloads are delivered through Apple's push service. They carry the minimum needed to show the alert, and sensitive detail stays on your devices.</p>
+    </div>
+    <div class="stack" style="gap:8px">
+      <h3><span class="glyph">▸</span> purchases</h3>
+      <p class="dim small">Payments are processed by Stripe; your card never touches our systems. For an active license we store: your email address, the plan, and its status. That's the entire customer database. Ask us to delete it anytime at hello@lajward.dev.</p>
+    </div>
+    <div class="stack" style="gap:8px">
+      <h3><span class="glyph">▸</span> this website</h3>
+      <p class="dim small">No cookies, no analytics, no trackers. The pricing page talks to our billing service only when you apply a code or start a checkout.</p>
+    </div>
+    <div class="stack" style="gap:8px">
+      <h3><span class="glyph">▸</span> app store label</h3>
+      <p class="dim small">The iphone app's privacy label is “Data Not Collected”, and it means it.</p>
+    </div>
+  </div>
+</section>
+</div>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <a class="brand" href="index.html"><span class="glyph">✻</span>session watch</a>
+      <a href="pricing.html">pricing</a>
+      <a href="mailto:hello@lajward.dev">hello@lajward.dev</a>
+    </div>
+    <p class="foot-note">© 2026 lajward · Session Watch is an independent tool, not affiliated with or endorsed by Anthropic.</p>
+  </div>
+</footer>
+
+</body>
+</html>

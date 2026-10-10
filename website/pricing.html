@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Session Watch Pricing</title>
+<meta name="description" content="Session Watch plans: free on the Mac, Pro for the iphone remote. Monthly, yearly or lifetime — discount codes welcome.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="index.html"><span class="glyph">✻</span>session watch</a>
+    <div class="nav-links">
+      <a href="index.html#features">features</a>
+      <a href="index.html#install">install</a>
+      <a href="index.html#faq">faq</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<section>
+  <div class="section-head">
+    <span class="eyebrow">checkout</span>
+    <h2>pick a plan. the mac app stays free either way.</h2>
+    <p class="dim">Pro unlocks the iphone remote: the encrypted relay, push notifications, lock-screen approvals, live activities and widgets. Pay with any card through Stripe.</p>
+  </div>
+
+  <div class="stack" style="max-width:560px; margin-bottom:36px">
+    <div class="email-box">
+      <label class="small dim" for="email-input">email for your license (optional — stripe asks anyway)</label>
+      <input id="email-input" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" style="width:100%">
+    </div>
+    <div>
+      <label class="small dim" for="code-input">discount code</label>
+      <div class="code-box">
+        <input id="code-input" type="text" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="e.g. LAUNCH20">
+        <button class="btn btn-outline btn-sm" id="code-apply" type="button" style="min-height:46px">apply</button>
+      </div>
+      <div class="code-msg" id="code-msg"></div>
+    </div>
+  </div>
+
+  <div class="price-grid">
+    <div class="price-card">
+      <h3>pro monthly</h3>
+      <div class="amount" data-price="pro_monthly">$4.99<small>/month</small></div>
+      <ul>
+        <li>iphone app with e2e relay</li>
+        <li>push notifications &amp; lock-screen approvals</li>
+        <li>live activity, widgets, face id lock</li>
+        <li>cancel anytime</li>
+      </ul>
+      <button class="btn btn-outline" data-checkout="pro_monthly" type="button">subscribe monthly</button>
+    </div>
+    <div class="price-card hot">
+      <span class="flag">2 months free</span>
+      <h3>pro yearly</h3>
+      <div class="amount" data-price="pro_yearly">$39<small>/year</small></div>
+      <ul>
+        <li>everything in pro</li>
+        <li>one bill a year</li>
+        <li>priority on feature requests</li>
+      </ul>
+      <button class="btn btn-primary" data-checkout="pro_yearly" type="button">subscribe yearly</button>
+    </div>
+    <div class="price-card">
+      <h3>lifetime</h3>
+      <div class="amount" data-price="lifetime">$99<small> once</small></div>
+      <ul>
+        <li>everything in pro, forever</li>
+        <li>every future update included</li>
+        <li>no renewals, ever</li>
+      </ul>
+      <button class="btn btn-outline" data-checkout="lifetime" type="button">buy lifetime</button>
+    </div>
+  </div>
+
+  <p class="price-foot">Checkout opens on stripe.com — we never see your card. 14-day refund, no questions: <a href="mailto:hello@lajward.dev">hello@lajward.dev</a>.</p>
+</section>
+
+<section class="hairline-top">
+  <div class="faq">
+    <details>
+      <summary>how is the license delivered?</summary>
+      <div class="a"><p>Your email is your license. After checkout, sign in with it in the iphone app's settings and Pro unlocks on the spot. One license covers your own Macs and phones.</p></div>
+    </details>
+    <details>
+      <summary>can i switch plans?</summary>
+      <div class="a"><p>Yes — upgrading from monthly to yearly or lifetime prorates automatically through Stripe. Email us and it's handled.</p></div>
+    </details>
+    <details>
+      <summary>do discount codes stack?</summary>
+      <div class="a"><p>One code per checkout. A code can be a percentage or a fixed amount off, and some codes only apply to certain plans — the price above updates when you apply one.</p></div>
+    </details>
+  </div>
+</section>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <a class="brand" href="index.html"><span class="glyph">✻</span>session watch</a>
+      <a href="privacy.html">privacy</a>
+      <a href="https://github.com/rashid2003/claude-watch" rel="noopener">github</a>
+      <a href="mailto:hello@lajward.dev">hello@lajward.dev</a>
+    </div>
+    <p class="foot-note">© 2026 lajward · Session Watch is an independent tool, not affiliated with or endorsed by Anthropic.</p>
+  </div>
+</footer>
+
+<script src="assets/billing.js"></script>
+</body>
+</html>

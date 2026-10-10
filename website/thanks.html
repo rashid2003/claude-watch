@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Session Watch — Welcome</title>
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="index.html"><span class="glyph">✻</span>session watch</a>
+  </div>
+</nav>
+
+<div class="wrap">
+<section class="center">
+  <div style="display:flex; justify-content:center; margin-bottom:8px">
+    <div id="buddy-host" style="width:200px"></div>
+  </div>
+  <h1 style="font-size:clamp(26px,5vw,40px)">you're in. <span class="t-green">✓</span></h1>
+  <div class="stack" style="align-items:center; margin-top:20px">
+    <p class="dim">Payment confirmed — buddy is celebrating. Your receipt is on its way from Stripe.</p>
+    <div class="stack" style="max-width:520px; text-align:left; gap:10px; margin-top:12px">
+      <p class="small"><span class="glyph">1.</span> install the mac app from the <a href="index.html#install">install page</a>, if you haven't</p>
+      <p class="small"><span class="glyph">2.</span> get the iphone app and scan the pairing QR the mac shows you</p>
+      <p class="small"><span class="glyph">3.</span> in the iphone app's settings, sign in with the email you used at checkout — pro unlocks right there</p>
+    </div>
+    <p class="small dim" style="margin-top:16px">stuck? <a href="mailto:hello@lajward.dev">hello@lajward.dev</a> — a human answers.</p>
+  </div>
+</section>
+</div>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <a class="brand" href="index.html"><span class="glyph">✻</span>session watch</a>
+      <a href="privacy.html">privacy</a>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/buddy.js"></script>
+<script>Buddy.mount(document.getElementById("buddy-host"), "blobby", "celebrating");</script>
+</body>
+</html>
