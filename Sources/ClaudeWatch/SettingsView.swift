@@ -28,6 +28,7 @@ struct SettingsView: View {
             }
 
             BuddySettingsSection()
+            BuddyMindSettingsSection()
 
             Section {
                 Toggle("Show in menu bar", isOn: Binding(get: { cfg.showInMenuBar }, set: { model.setShowInMenuBar($0) }))

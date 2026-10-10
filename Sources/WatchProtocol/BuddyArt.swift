@@ -9,6 +9,25 @@ public enum BuddyStyle: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// What the buddy does with its own time when no chat needs it (its "life").
+public enum BuddyActivity: String, CaseIterable, Codable, Sendable, Identifiable {
+    case idle, sleep, eat, movie, explore, read, dance, stretch, excited
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .idle: "Hanging out"
+        case .sleep: "Sleeping"
+        case .eat: "Eating"
+        case .movie: "Watching a movie"
+        case .explore: "Exploring"
+        case .read: "Reading"
+        case .dance: "Dancing"
+        case .stretch: "Stretching"
+        case .excited: "Found something!"
+        }
+    }
+}
+
 enum BuddyMouth { case smile, open, flat, frown, cheer }
 enum BuddyEyes { case open, wide, closed, happy, cross }
 
@@ -25,13 +44,69 @@ struct BuddyPose {
     var armR: Double = 20
     var feet: CGFloat = 0       // -1...1 foot swing
 
-    static func make(_ mood: BuddyMood, t: Double, speed: Double = 1) -> BuddyPose {
+
+    /// The buddy's own life: one pose per activity.
+    static func life(_ a: BuddyActivity, t: Double, blink: Bool) -> BuddyPose {
+        var p = BuddyPose()
+        switch a {
+        case .sleep:
+            p.squash = CGFloat(sin(t * 1.6)) * 0.04 + 0.05
+            p.eyes = .closed; p.mouth = .flat; p.armL = 8; p.armR = 8; p.lean = sin(t * 0.8) * 2
+        case .idle:
+            p.squash = CGFloat(sin(t * 2)) * 0.025
+            p.look = CGFloat(sin(t * 0.7)) * (fmod(t, 9) < 4.5 ? 1 : 0.3)
+            p.eyes = blink ? .closed : .open; p.mouth = .smile
+            p.armL = 14 + sin(t * 1.4) * 6; p.armR = 14 - sin(t * 1.4) * 6; p.lean = sin(t * 0.9) * 2
+            if fmod(t, 11) > 9.4 { p.armR = 150 + sin(t * 14) * 25; p.y = CGFloat(abs(sin(t * 5))) * 3 }   // a little wave
+        case .eat:
+            let bite = sin(t * 6)
+            p.squash = CGFloat(bite) * 0.03
+            p.eyes = bite > 0.6 ? .happy : .open
+            p.mouth = bite > 0 ? .open : .smile
+            p.armL = 20; p.armR = 55 + CGFloat(max(0, bite)) * 20; p.look = 0.4; p.lean = 2
+        case .movie:
+            p.squash = 0.08
+            p.look = -0.9
+            p.eyes = fmod(t, 7) > 5.5 ? .happy : .wide
+            p.mouth = fmod(t, 7) > 5.5 ? .cheer : .flat
+            p.armL = 25; p.armR = 60 + sin(t * 3) * 8
+            p.lean = fmod(t, 7) > 5.5 ? sin(t * 20) * 3 : 0
+        case .explore:
+            let s = t * 3.2
+            p.y = CGFloat(abs(sin(s))) * 4
+            p.look = CGFloat(sin(t * 1.5)); p.lean = sin(t * 1.5) * 6 + 4
+            p.eyes = .wide; p.mouth = .open
+            p.armL = 20; p.armR = 105 + sin(t * 1.5) * 12; p.feet = CGFloat(sin(s))
+        case .read:
+            p.squash = 0.05
+            p.look = CGFloat(sin(t * 1.2)); p.eyes = blink ? .closed : .open; p.mouth = .flat
+            p.armL = 55; p.armR = 55; p.lean = -2
+        case .dance:
+            let s = t * 4.5
+            p.y = CGFloat(abs(sin(s))) * 9
+            p.lean = sin(s) * 9; p.squash = CGFloat(cos(s * 2)) * 0.06
+            p.armL = 100 + sin(s) * 55; p.armR = 100 - sin(s) * 55; p.feet = CGFloat(sin(s))
+            p.eyes = .happy; p.mouth = .cheer
+        case .stretch:
+            let k = (sin(t * 1.3) + 1) / 2
+            p.squash = -0.08 * CGFloat(k)
+            p.armL = 40 + 130 * k; p.armR = 40 + 130 * k
+            p.eyes = .closed; p.mouth = k > 0.5 ? .open : .flat; p.y = CGFloat(k) * 4
+        case .excited:
+            let s = t * 6
+            p.y = CGFloat(abs(sin(s))) * 15; p.squash = CGFloat(cos(s * 2)) * 0.08
+            p.armL = 145 + sin(t * 13) * 20; p.armR = 145 - sin(t * 13) * 20
+            p.eyes = .wide; p.mouth = .cheer; p.lean = sin(s) * 5
+        }
+        return p
+    }
+
+    static func make(_ mood: BuddyMood, activity: BuddyActivity = .sleep, t: Double, speed: Double = 1) -> BuddyPose {
         var p = BuddyPose()
         let blink = fmod(t, 3.4) < 0.12
         switch mood {
         case .sleeping:
-            p.squash = CGFloat(sin(t * 1.6)) * 0.04
-            p.eyes = .closed; p.mouth = .flat; p.armL = 8; p.armR = 8; p.lean = sin(t * 0.8) * 2
+            return life(activity, t: t, blink: blink)
         case .busy:
             let s = t * 7 * speed
             p.y = CGFloat(abs(sin(s))) * 7
@@ -80,13 +155,17 @@ public struct BuddyView: View {
     var t: Double
     var speed: Double = 1
     var facingLeft = false
+    var activity: BuddyActivity = .sleep
+    var food = "🍪"
 
-    public init(style: BuddyStyle, mood: BuddyMood, t: Double, speed: Double = 1, facingLeft: Bool = false) {
+    public init(style: BuddyStyle, mood: BuddyMood, t: Double, speed: Double = 1, facingLeft: Bool = false,
+                activity: BuddyActivity = .sleep, food: String = "🍪") {
         self.style = style; self.mood = mood; self.t = t; self.speed = speed; self.facingLeft = facingLeft
+        self.activity = activity; self.food = food
     }
 
     public var body: some View {
-        let pose = BuddyPose.make(mood, t: t, speed: speed)
+        let pose = BuddyPose.make(mood, activity: activity, t: t, speed: speed)
         ZStack {
             Canvas { ctx, size in
                 let k = min(size.width, size.height) / 100
@@ -100,7 +179,7 @@ public struct BuddyView: View {
                 case .pixel: BuddyArt.pixel(&c, pose, mood)
                 case .bot: BuddyArt.bot(&c, pose, mood, t)
                 }
-                BuddyArt.extras(&c, mood, t)
+                BuddyArt.extras(&c, mood, t, activity: activity, food: food)
             }
         }
         .aspectRatio(1, contentMode: .fit)
@@ -291,15 +370,84 @@ enum BuddyArt {
 
     // MARK: Extras: zzz, "!", sweat, confetti
 
-    static func extras(_ c: inout GraphicsContext, _ mood: BuddyMood, _ t: Double) {
-        switch mood {
-        case .sleeping:
+    static func emoji(_ c: inout GraphicsContext, _ e: String, at p: CGPoint, size: CGFloat, opacity: Double = 1, rotate: Double = 0) {
+        var g = c
+        g.translateBy(x: p.x, y: p.y); g.rotate(by: .degrees(rotate)); g.opacity = opacity
+        g.draw(Text(e).font(.system(size: size)), at: .zero)
+    }
+
+    /// The props of a life activity: food, a screen, a book, music, a magnifier…
+    static func lifeProps(_ c: inout GraphicsContext, _ a: BuddyActivity, _ t: Double, food: String) {
+        switch a {
+        case .idle: break
+        case .sleep:
+            emoji(&c, "🌙", at: CGPoint(x: 18, y: 18), size: 17, opacity: 0.9, rotate: sin(t) * 4)
+            // a blanket over the lower half
+            let blanket = Path(roundedRect: CGRect(x: 22, y: 64, width: 56, height: 26), cornerRadius: 10)
+            c.fill(blanket, with: .linearGradient(Gradient(colors: [Color(red: 0.55, green: 0.5, blue: 0.9), Color(red: 0.4, green: 0.36, blue: 0.78)]),
+                                                  startPoint: CGPoint(x: 50, y: 64), endPoint: CGPoint(x: 50, y: 90)))
+            for i in 0..<3 { c.fill(Path(ellipseIn: CGRect(x: 32 + CGFloat(i) * 16, y: 74, width: 6, height: 6)), with: .color(.white.opacity(0.35))) }
             for i in 0..<3 {
                 let ph = fmod(t * 0.5 + Double(i) / 3, 1)
                 let text = Text("z").font(.system(size: 9 + CGFloat(ph) * 9, weight: .heavy, design: .rounded))
                     .foregroundColor(BuddyPalette.accent(.sleeping).opacity(1 - ph))
                 c.draw(text, at: CGPoint(x: 70 + CGFloat(ph) * 14, y: 34 - CGFloat(ph) * 20))
             }
+        case .eat:
+            let cycle = fmod(t, 5) / 5                       // five bites per food
+            let bites = Int(cycle * 5)
+            let toMouth = CGFloat(max(0, sin(t * 6)))
+            let size = 20 - CGFloat(bites) * 2.6
+            emoji(&c, food, at: CGPoint(x: 72 - toMouth * 16, y: 56 + toMouth * 6), size: max(8, size))
+            for i in 0..<3 where toMouth > 0.7 {
+                c.fill(Path(ellipseIn: CGRect(x: 52 + CGFloat(i) * 6, y: 70 + CGFloat(i % 2) * 5, width: 2.5, height: 2.5)), with: .color(.brown.opacity(0.6)))
+            }
+        case .movie:
+            // a little screen top-left, flickering, and a popcorn bucket
+            let flick = 0.55 + 0.45 * sin(t * 9) * sin(t * 3.7)
+            let r = CGRect(x: 2, y: 4, width: 38, height: 26)
+            c.fill(Path(roundedRect: r, cornerRadius: 4), with: .color(Color(red: 0.08, green: 0.08, blue: 0.14)))
+            let tint = [Color.pink, .cyan, .yellow, .mint][Int(t * 1.3) % 4]
+            c.fill(Path(roundedRect: r.insetBy(dx: 3, dy: 3), cornerRadius: 2), with: .color(tint.opacity(0.35 + 0.4 * flick)))
+            c.stroke(Path(roundedRect: r, cornerRadius: 4), with: .color(.gray.opacity(0.7)), lineWidth: 1.5)
+            emoji(&c, "🎬", at: CGPoint(x: 21, y: 17), size: 13, opacity: 0.8)
+            emoji(&c, "🍿", at: CGPoint(x: 74, y: 78), size: 22)
+            let k = fmod(t * 0.9, 1)
+            emoji(&c, "·", at: CGPoint(x: 70 + CGFloat(k) * 6, y: 70 - CGFloat(sin(k * .pi)) * 14), size: 14, opacity: 1 - k)
+        case .explore:
+            emoji(&c, "🔎", at: CGPoint(x: 78 + CGFloat(sin(t * 1.5)) * 4, y: 56 + CGFloat(cos(t * 3)) * 2), size: 22, rotate: sin(t * 1.5) * 15)
+            for i in 0..<2 {
+                let ph = fmod(t * 0.7 + Double(i) * 0.5, 1)
+                let q = Text("?").font(.system(size: 10 + CGFloat(ph) * 7, weight: .heavy, design: .rounded)).foregroundColor(.orange.opacity(1 - ph))
+                c.draw(q, at: CGPoint(x: 28 + CGFloat(i) * 40, y: 26 - CGFloat(ph) * 14))
+            }
+        case .read:
+            emoji(&c, "📖", at: CGPoint(x: 50, y: 74), size: 26, rotate: sin(t * 0.8) * 2)
+            let ph = fmod(t * 0.35, 1)
+            emoji(&c, "✨", at: CGPoint(x: 72, y: 36 - CGFloat(ph) * 10), size: 11, opacity: sin(ph * .pi))
+        case .dance:
+            for i in 0..<3 {
+                let ph = fmod(t * 0.8 + Double(i) / 3, 1)
+                emoji(&c, i % 2 == 0 ? "🎵" : "🎶", at: CGPoint(x: 14 + CGFloat(i) * 34 + CGFloat(sin(t * 3 + Double(i))) * 5, y: 40 - CGFloat(ph) * 28),
+                      size: 14, opacity: 1 - ph)
+            }
+        case .stretch:
+            let ph = fmod(t * 0.4, 1)
+            emoji(&c, "💨", at: CGPoint(x: 80, y: 40 - CGFloat(ph) * 8), size: 12, opacity: sin(ph * .pi) * 0.7)
+        case .excited:
+            let pulse = 1 + 0.15 * sin(t * 9)
+            emoji(&c, "💡", at: CGPoint(x: 50, y: 12), size: 26 * pulse)
+            for i in 0..<4 {
+                let a = t * 3 + Double(i) * .pi / 2
+                emoji(&c, "✨", at: CGPoint(x: 50 + CGFloat(cos(a)) * 30, y: 20 + CGFloat(sin(a)) * 12), size: 9, opacity: 0.8)
+            }
+        }
+    }
+
+    static func extras(_ c: inout GraphicsContext, _ mood: BuddyMood, _ t: Double, activity: BuddyActivity = .sleep, food: String = "🍪") {
+        switch mood {
+        case .sleeping:
+            lifeProps(&c, activity, t, food: food)
         case .needsYou:
             let pulse = 1 + 0.18 * sin(t * 9)
             var g = c

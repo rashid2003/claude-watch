@@ -15,6 +15,10 @@ final class BuddyPrefs: ObservableObject {
     @Published var walks: Bool { didSet { d.set(walks, forKey: "buddy.walks") } }
     @Published var showBubble: Bool { didSet { d.set(showBubble, forKey: "buddy.bubble") } }
     @Published var celebrates: Bool { didSet { d.set(celebrates, forKey: "buddy.celebrate") } }
+    /// Lets the buddy live its own life (eat, sleep, watch movies, explore) while no chat needs it.
+    @Published var lifeEnabled: Bool { didSet { d.set(lifeEnabled, forKey: "buddy.life") } }
+    /// Forces an activity so you can see it; not saved.
+    @Published var previewActivity: BuddyActivity?
     /// Forces a mood so you can see each animation; nil follows the real chats. Not saved.
     @Published var preview: BuddyMood?
 
@@ -29,8 +33,10 @@ final class BuddyPrefs: ObservableObject {
         walks = d.object(forKey: "buddy.walks") as? Bool ?? true
         showBubble = d.object(forKey: "buddy.bubble") as? Bool ?? true
         celebrates = d.object(forKey: "buddy.celebrate") as? Bool ?? true
+        lifeEnabled = d.object(forKey: "buddy.life") as? Bool ?? true
         #if DEBUG
         if let m = ProcessInfo.processInfo.environment["SW_BUDDY_MOOD"] { preview = BuddyMood(rawValue: m) }
+        if let a = ProcessInfo.processInfo.environment["SW_BUDDY_ACTIVITY"] { previewActivity = BuddyActivity(rawValue: a) }
         if let s = ProcessInfo.processInfo.environment["SW_BUDDY_STYLE"], let st = BuddyStyle(rawValue: s) { style = st }
         #endif
     }

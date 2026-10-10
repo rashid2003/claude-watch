@@ -30,7 +30,8 @@ final class BuddyDock {
     }
 
     private func view() -> DockBuddyView {
-        DockBuddyView(style: ctl.prefs.style, mood: ctl.mood, t: Date.timeIntervalSinceReferenceDate, speed: ctl.speed)
+        DockBuddyView(style: ctl.prefs.style, mood: ctl.mood, t: Date.timeIntervalSinceReferenceDate, speed: ctl.speed,
+                      activity: ctl.activity, food: ctl.food)
     }
 
     private func redraw() {
@@ -48,13 +49,14 @@ final class BuddyDock {
 
 struct DockBuddyView: View {
     var style: BuddyStyle, mood: BuddyMood, t: Double, speed: Double
+    var activity: BuddyActivity = .sleep, food = "🍪"
     var body: some View {
         let c = BuddyPalette.accent(mood)
         ZStack {
             RoundedRectangle(cornerRadius: 96, style: .continuous)
                 .fill(LinearGradient(colors: [c.opacity(0.95), c.opacity(0.55)], startPoint: .top, endPoint: .bottom))
                 .padding(8)
-            BuddyView(style: style, mood: mood, t: t, speed: speed).padding(14)
+            BuddyView(style: style, mood: mood, t: t, speed: speed, activity: activity, food: food).padding(14)
         }
     }
 }
@@ -102,7 +104,7 @@ final class BuddyMenuBar: NSObject, NSMenuDelegate {
         guard let button = item?.button else { return }
         // Sleeping barely moves: redraw it rarely.
         let t = Date.timeIntervalSinceReferenceDate
-        let r = ImageRenderer(content: BuddyView(style: ctl.prefs.style, mood: ctl.mood, t: t, speed: ctl.speed)
+        let r = ImageRenderer(content: BuddyView(style: ctl.prefs.style, mood: ctl.mood, t: t, speed: ctl.speed, activity: ctl.activity, food: ctl.food)
             .frame(width: 22, height: 22))
         r.scale = NSScreen.main?.backingScaleFactor ?? 2
         if let img = r.nsImage { img.isTemplate = false; button.image = img }

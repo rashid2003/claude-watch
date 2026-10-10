@@ -60,6 +60,8 @@ Last updated: 2026-10-09.
 
 ## Later
 
+- **Buddy everywhere**: the character in the MacBook notch, as an iPhone Live Activity (Dynamic Island), on the iPhone Lock Screen and Home Screen widgets, and on the Mac screen as widgets/desktop if possible
+- **Buddy life and mind** (work in progress on `feat/buddy-life`, not merged): per-character `life.json` / `mind.json` / `memory.json`, activities (eat, sleep, movie, explore…), a notebook, and web-only learning. Still to do: check the announcement bubble on screen, and test one real search (needs permission to run `claude -p` with WebSearch/WebFetch)
 
 ## Decisions
 
