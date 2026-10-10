@@ -1,0 +1,20 @@
+name = "session-watch-billing"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+workers_dev = false
+routes = [{ pattern = "billing.sessionwatch.lajward.co", custom_domain = true }]
+
+[observability]
+enabled = false
+
+# Secrets (set with `wrangler secret put <NAME>`):
+#   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, ADMIN_TOKEN
+# Price IDs can be plain vars or secrets:
+#   PRICE_PRO_MONTHLY, PRICE_PRO_YEARLY, PRICE_LIFETIME
+
+[vars]
+SITE_ORIGIN = "https://sessionwatch.lajward.co"
+
+[[kv_namespaces]]
+binding = "BILLING_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
