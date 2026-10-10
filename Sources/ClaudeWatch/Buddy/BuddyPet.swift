@@ -13,10 +13,10 @@ final class BuddyPet {
     private var phase = 0.0
     private var offset: CGFloat = 0
     let walk = PetWalk()
-    static let size = CGSize(width: 260, height: 320)   // room for the biggest pet and bubble
+    static let size = CGSize(width: 300, height: 340)   // room for the biggest pet and bubble
     /// The panel hugs the pet and bubble so its transparent part doesn't block clicks.
     private var wanted: CGSize {
-        CGSize(width: max(210, 112 * ctl.prefs.scale + 50), height: 112 * ctl.prefs.scale + (ctl.bubble != nil ? 66 : 6))
+        CGSize(width: max(250, 112 * ctl.prefs.scale + 50), height: 112 * ctl.prefs.scale + (ctl.bubble != nil ? 96 : 6))
     }
 
     init(_ ctl: BuddyController) { self.ctl = ctl }
@@ -101,14 +101,21 @@ struct BuddyPetView: View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
             if let b = ctl.bubble {
-                BubbleView(title: b.title, subtitle: b.subtitle, color: BuddyPalette.accent(ctl.mood))
+                BubbleView(title: b.title, subtitle: b.subtitle, color: b.color)
                     .transition(.scale(scale: 0.6, anchor: .bottom).combined(with: .opacity))
             }
             TimelineView(.animation) { tl in
                 BuddyView(style: prefs.style, mood: ctl.mood, t: tl.date.timeIntervalSinceReferenceDate,
-                          speed: ctl.speed, facingLeft: walk.facingLeft)
+                          speed: ctl.speed, facingLeft: walk.facingLeft, activity: ctl.activity, food: ctl.food)
                     .frame(width: side, height: side)
                     .scaleEffect(hover ? 1.08 : 1, anchor: .bottom)
+                    .overlay(alignment: .topTrailing) {
+                        if ctl.unreadCount > 0 && ctl.prefs.lifeEnabled {
+                            Text("💡\(ctl.unreadCount)").font(.system(size: 11, weight: .bold, design: .rounded)).foregroundStyle(.white)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Capsule().fill(Color.orange)).offset(x: 4, y: 6)
+                        }
+                    }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
@@ -127,11 +134,13 @@ struct BubbleView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.system(size: 12, weight: .bold, design: .rounded)).lineLimit(1)
-                Text(subtitle).font(.system(size: 10, weight: .medium, design: .rounded)).opacity(0.85).lineLimit(1)
+                if !subtitle.isEmpty {
+                    Text(subtitle).font(.system(size: 10, weight: .medium, design: .rounded)).opacity(0.85).lineLimit(3)
+                }
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 11).padding(.vertical, 6)
-            .frame(maxWidth: 190)
+            .frame(maxWidth: 230)
             .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(color.gradient))
             .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
             Triangle().fill(color).frame(width: 14, height: 7)
@@ -157,6 +166,10 @@ struct BuddyMenuContent: View {
             Button("\(Self.mark(c.kind))  \(c.title)  ·  \(c.reason)") { ctl.open(c) }
         }
         Divider()
+        if ctl.prefs.lifeEnabled {
+            Button(ctl.unreadCount > 0 ? "Notebook (\(ctl.unreadCount) new)" : "Notebook") { ctl.showNotebook() }
+            Button("Learn something now") { ctl.brain.learnNow() }.disabled(ctl.brain.learning != nil)
+        }
         Picker("Character", selection: Binding(get: { ctl.prefs.style }, set: { ctl.prefs.style = $0 })) {
             ForEach(BuddyStyle.allCases) { Text($0.title).tag($0) }
         }
